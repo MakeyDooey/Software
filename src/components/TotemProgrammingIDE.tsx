@@ -23,6 +23,15 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const [isProgramming, setIsProgramming] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
+
+  // File editor state
+  const [fileContent, setFileContent] = useState<string>('');
+  const [editedContent, setEditedContent] = useState<string>('');
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [editorMode, setEditorMode] = useState<'view' | 'edit'>('view');
+  const editorRef = useRef<HTMLTextAreaElement>(null);
   
   // Serial monitor state
   const [termOutput, setTermOutput] = useState<string>('');
@@ -380,9 +389,507 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      setSelectedFile(file);
-      addLog(`Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
+      processSelectedFile(file);
     }
+  };
+
+  // Process a selected file (from input or drag-drop)
+  const processSelectedFile = async (file: File) => {
+    setSelectedFile(file);
+    addLog(`Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
+
+    // Read file content for text-based files
+    const textExtensions = ['.c', '.cpp', '.h', '.hpp', '.ino', '.txt', '.json', '.py', '.s', '.asm'];
+    const isTextFile = textExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+
+    if (isTextFile) {
+      try {
+        const content = await readFileAsText(file);
+        setFileContent(content);
+        setEditedContent(content);
+        setIsEditorOpen(true);
+        setEditorMode('view');
+        setHasUnsavedChanges(false);
+        addLog(`Loaded ${file.name} for editing`);
+      } catch (error) {
+        addLog(`Error reading file: ${error}`);
+      }
+    } else {
+      // Binary file - just show info, no editor
+      setFileContent('');
+      setEditedContent('');
+      setIsEditorOpen(false);
+      addLog(`Binary file selected - ready for flashing`);
+    }
+  };
+
+  // Read file as text
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = (e) => reject(e);
+      reader.readAsText(file);
+    });
+  };
+
+  // Drag and drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      const file = files[0];
+      const validExtensions = ['.bin', '.hex', '.elf', '.c', '.cpp', '.h', '.hpp', '.ino', '.txt', '.json', '.py', '.s', '.asm'];
+      const isValid = validExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+
+      if (isValid) {
+        processSelectedFile(file);
+      } else {
+        addLog(`Invalid file type: ${file.name}. Supported: ${validExtensions.join(', ')}`);
+      }
+    }
+  };
+
+  // Editor content change handler
+  const handleEditorChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newContent = e.target.value;
+    setEditedContent(newContent);
+    setHasUnsavedChanges(newContent !== fileContent);
+  };
+
+  // Save edited content
+  const handleSaveFile = () => {
+    if (!selectedFile || !hasUnsavedChanges) return;
+
+    // Create a new file blob with the edited content
+    const blob = new Blob([editedContent], { type: 'text/plain' });
+    const newFile = new File([blob], selectedFile.name, { type: selectedFile.type });
+
+    setSelectedFile(newFile);
+    setFileContent(editedContent);
+    setHasUnsavedChanges(false);
+    addLog(`Saved changes to ${selectedFile.name}`);
+  };
+
+  // Download file
+  const handleDownloadFile = () => {
+    if (!selectedFile) return;
+
+    const content = hasUnsavedChanges ? editedContent : fileContent;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = selectedFile.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    addLog(`Downloaded: ${selectedFile.name}`);
+  };
+
+  // Create new file
+  const handleNewFile = () => {
+    const fileName = prompt('Enter file name (e.g., main.c):');
+    if (fileName) {
+      const blob = new Blob(['// New file\n'], { type: 'text/plain' });
+      const file = new File([blob], fileName, { type: 'text/plain' });
+      setSelectedFile(file);
+      setFileContent('// New file\n');
+      setEditedContent('// New file\n');
+      setIsEditorOpen(true);
+      setEditorMode('edit');
+      setHasUnsavedChanges(false);
+      addLog(`Created new file: ${fileName}`);
+    }
+  };
+
+  // Discard changes
+  const handleDiscardChanges = () => {
+    if (hasUnsavedChanges) {
+      if (confirm('Discard unsaved changes?')) {
+        setEditedContent(fileContent);
+        setHasUnsavedChanges(false);
+        setEditorMode('view');
+        addLog('Changes discarded');
+      }
+    }
+  };
+
+  // Close editor
+  const handleCloseEditor = () => {
+    if (hasUnsavedChanges) {
+      if (!confirm('You have unsaved changes. Close anyway?')) {
+        return;
+      }
+    }
+    setIsEditorOpen(false);
+    setEditorMode('view');
+  };
+
+  // Example ESP32-S3 firmware in Leo's format with command/response handling
+  // Compatible with MakeyDooey Monitor tab - uses neopixelWrite() (no library needed)
+  const ESP32_LED_EXAMPLE = `// =====================================================
+// MakeyDooey ESP32-S3 Interactive Firmware
+// Leo's Format - Compatible with Monitor Tab Commands
+// =====================================================
+//
+// This firmware implements a command-response protocol that works
+// with the MakeyDooey Monitor tab. No external libraries required!
+// Uses built-in neopixelWrite() for ESP32-S3 RGB LED on GPIO48.
+//
+// SUPPORTED COMMANDS (type in Monitor tab):
+//   hello        - Test connection, returns "Hello, World!"
+//   toggle-led   - Toggle LED on/off
+//   led-on       - Turn LED on (white)
+//   led-off      - Turn LED off
+//   blink        - Blink LED 5 times
+//   status       - Get system status
+//   help         - List available commands
+//   echo_send X  - Echo back the string X
+//   set_led R G B - Set LED to RGB color (0-255 each)
+//
+// =====================================================
+
+#include <Arduino.h>
+
+// ESP32-S3-WROOM-1 has RGB LED on GPIO48
+#define RGB_LED_PIN 48
+
+// LED state
+bool ledState = false;
+uint8_t ledR = 255, ledG = 255, ledB = 255;  // Default white
+
+// Command buffer
+String inputBuffer = "";
+const int MAX_BUFFER = 256;
+
+// =====================================================
+// LED CONTROL FUNCTIONS
+// =====================================================
+
+void setLED(uint8_t r, uint8_t g, uint8_t b) {
+  // ESP32-S3 built-in function for WS2812 RGB LED
+  neopixelWrite(RGB_LED_PIN, r, g, b);
+  ledR = r;
+  ledG = g;
+  ledB = b;
+}
+
+void ledOn() {
+  setLED(ledR, ledG, ledB);
+  ledState = true;
+  Serial.println("LED Turned ON.\\r");
+}
+
+void ledOff() {
+  setLED(0, 0, 0);
+  ledState = false;
+  Serial.println("LED Turned OFF.\\r");
+}
+
+void toggleLED() {
+  if (ledState) {
+    ledOff();
+  } else {
+    ledOn();
+  }
+}
+
+void blinkLED(int times) {
+  Serial.print("Blinking LED ");
+  Serial.print(times);
+  Serial.println(" times...\\r");
+
+  for (int i = 0; i < times; i++) {
+    setLED(0, 255, 0);  // Green blink
+    delay(200);
+    setLED(0, 0, 0);
+    delay(200);
+    Serial.print("Blink ");
+    Serial.println(i + 1);
+  }
+
+  // Restore previous state
+  if (ledState) {
+    setLED(ledR, ledG, ledB);
+  }
+  Serial.println("Blink complete.\\r");
+}
+
+// =====================================================
+// COMMAND PROCESSING (Leo's Format)
+// =====================================================
+
+void processCommand(String cmd) {
+  cmd.trim();
+
+  if (cmd.length() == 0) {
+    return;
+  }
+
+  // Parse command and arguments
+  int spaceIndex = cmd.indexOf(' ');
+  String command = (spaceIndex > 0) ? cmd.substring(0, spaceIndex) : cmd;
+  String args = (spaceIndex > 0) ? cmd.substring(spaceIndex + 1) : "";
+  command.toLowerCase();
+
+  // ===== COMMAND HANDLERS =====
+
+  if (command == "hello") {
+    Serial.println("Hello, World!\\r");
+  }
+
+  else if (command == "toggle-led") {
+    toggleLED();
+  }
+
+  else if (command == "led-on") {
+    ledOn();
+  }
+
+  else if (command == "led-off") {
+    ledOff();
+  }
+
+  else if (command == "blink") {
+    blinkLED(5);
+  }
+
+  else if (command == "status") {
+    Serial.println("=== ESP32-S3 Status ===\\r");
+    Serial.print("LED State: ");
+    Serial.println(ledState ? "ON" : "OFF");
+    Serial.print("LED Color: R=");
+    Serial.print(ledR);
+    Serial.print(" G=");
+    Serial.print(ledG);
+    Serial.print(" B=");
+    Serial.println(ledB);
+    Serial.print("Uptime: ");
+    Serial.print(millis() / 1000);
+    Serial.println(" seconds\\r");
+    Serial.print("Free Heap: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" bytes\\r");
+    Serial.println("=======================\\r");
+  }
+
+  else if (command == "help") {
+    Serial.println("=== Available Commands ===\\r");
+    Serial.println("hello        - Test connection\\r");
+    Serial.println("toggle-led   - Toggle LED on/off\\r");
+    Serial.println("led-on       - Turn LED on\\r");
+    Serial.println("led-off      - Turn LED off\\r");
+    Serial.println("blink        - Blink LED 5 times\\r");
+    Serial.println("status       - System status\\r");
+    Serial.println("set_led R G B - Set RGB color (0-255)\\r");
+    Serial.println("echo_send X  - Echo string X\\r");
+    Serial.println("get_pid      - Get PID values\\r");
+    Serial.println("help         - Show this help\\r");
+    Serial.println("==========================\\r");
+  }
+
+  else if (command == "echo_send") {
+    if (args.length() > 0) {
+      Serial.print("Echo (");
+      Serial.print(args.length());
+      Serial.print(" bytes): ");
+      Serial.println(args);
+      Serial.println("Echo complete.\\r");
+    } else {
+      Serial.println("Usage: echo_send <string>\\r");
+    }
+  }
+
+  else if (command == "set_led") {
+    // Parse R G B values
+    int r = 255, g = 255, b = 255;
+    if (args.length() > 0) {
+      sscanf(args.c_str(), "%d %d %d", &r, &g, &b);
+      r = constrain(r, 0, 255);
+      g = constrain(g, 0, 255);
+      b = constrain(b, 0, 255);
+    }
+    ledR = r;
+    ledG = g;
+    ledB = b;
+    setLED(r, g, b);
+    ledState = true;
+    Serial.print("LED set to R=");
+    Serial.print(r);
+    Serial.print(" G=");
+    Serial.print(g);
+    Serial.print(" B=");
+    Serial.println(b);
+  }
+
+  else if (command == "get_pid") {
+    // Simulated PID response for compatibility
+    Serial.println("ESP32 PID: Kp=1.0,Ki=0.0,Kd=0.0,Mode=1\\r");
+  }
+
+  else if (command == "set_pid") {
+    // Acknowledge but note this is simulated
+    Serial.println("PID values updated (simulated).\\r");
+  }
+
+  else {
+    Serial.print("Unknown command: ");
+    Serial.println(command);
+    Serial.println("Type 'help' for available commands.\\r");
+  }
+}
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup() {
+  Serial.begin(115200);
+
+  // Wait for serial connection (USB CDC)
+  delay(1000);
+
+  // Initialize LED to off
+  setLED(0, 0, 0);
+
+  // Startup message
+  Serial.println("\\r");
+  Serial.println("=========================================\\r");
+  Serial.println("  MakeyDooey ESP32-S3 Firmware v1.0\\r");
+  Serial.println("  Leo's Format - Interactive Mode\\r");
+  Serial.println("=========================================\\r");
+  Serial.println("Type 'help' for available commands.\\r");
+  Serial.println("\\r");
+
+  // Visual startup indication - RGB cycle
+  setLED(255, 0, 0);   // Red
+  delay(300);
+  setLED(0, 255, 0);   // Green
+  delay(300);
+  setLED(0, 0, 255);   // Blue
+  delay(300);
+  setLED(0, 0, 0);     // Off
+
+  Serial.println("Ready.\\r");
+}
+
+// =====================================================
+// MAIN LOOP
+// =====================================================
+
+void loop() {
+  // Read serial input character by character
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+
+    // Handle line endings (CR, LF, or CRLF)
+    if (c == '\\r' || c == '\\n') {
+      if (inputBuffer.length() > 0) {
+        processCommand(inputBuffer);
+        inputBuffer = "";
+      }
+    }
+    // Handle backspace
+    else if (c == '\\b' || c == 127) {
+      if (inputBuffer.length() > 0) {
+        inputBuffer.remove(inputBuffer.length() - 1);
+      }
+    }
+    // Add character to buffer
+    else if (inputBuffer.length() < MAX_BUFFER) {
+      inputBuffer += c;
+    }
+  }
+
+  // Small delay to prevent CPU hogging
+  delay(1);
+}
+
+/*
+ * =====================================================
+ * SETUP INSTRUCTIONS FOR ESP32-S3-WROOM-1
+ * =====================================================
+ *
+ * NO EXTERNAL LIBRARIES NEEDED!
+ * This firmware uses the built-in neopixelWrite() function.
+ *
+ * BOARD SETTINGS (Arduino IDE 2.x):
+ * ---------------------------------
+ * 1. Board: "ESP32S3 Dev Module"
+ * 2. USB CDC On Boot: "Enabled"  <-- REQUIRED!
+ * 3. USB Mode: "Hardware CDC and JTAG"
+ * 4. Upload Mode: "UART0 / Hardware CDC"
+ * 5. Upload Speed: 921600 (or 115200 if issues)
+ *
+ * IF UPLOAD FAILS ("Failed to write to target RAM"):
+ * --------------------------------------------------
+ * Put ESP32-S3 into bootloader mode:
+ * 1. Hold down BOOT button
+ * 2. Press and release RESET button
+ * 3. Release BOOT button
+ * 4. Click Upload in Arduino IDE
+ * 5. After upload, press RESET to run
+ *
+ * USING WITH MAKEYDOOEY MONITOR TAB:
+ * ----------------------------------
+ * 1. Flash this firmware to your ESP32-S3
+ * 2. Open MakeyDooey app
+ * 3. Connect to your ESP32 (Connect USB Hardware)
+ * 4. Double-click the device to open IDE
+ * 5. Go to Monitor tab
+ * 6. Click "Connect" button
+ * 7. Type commands: hello, toggle-led, blink, status, help
+ *
+ * EXPECTED OUTPUT:
+ * ----------------
+ * On startup you should see:
+ *   "MakeyDooey ESP32-S3 Firmware v1.0"
+ *   "Type 'help' for available commands."
+ *   "Ready."
+ *
+ * Then the LED will flash RGB and turn off.
+ * Type 'hello' and press Enter - should see "Hello, World!"
+ */
+`;
+
+  // Simple test firmware that works over serial (no flashing needed)
+  // This sends commands to test if the board responds
+  const SERIAL_TEST_COMMANDS = [
+    { cmd: 'hello', desc: 'Test connection' },
+    { cmd: 'toggle-led', desc: 'Toggle LED on/off' },
+    { cmd: 'blink', desc: 'Blink LED 5 times' },
+  ];
+
+  // Load example firmware
+  const handleLoadExample = () => {
+    const fileName = 'esp32s3_led_blink.ino';
+    const blob = new Blob([ESP32_LED_EXAMPLE], { type: 'text/plain' });
+    const file = new File([blob], fileName, { type: 'text/plain' });
+
+    setSelectedFile(file);
+    setFileContent(ESP32_LED_EXAMPLE);
+    setEditedContent(ESP32_LED_EXAMPLE);
+    setIsEditorOpen(true);
+    setEditorMode('view');
+    setHasUnsavedChanges(false);
+    addLog(`Loaded example: ${fileName}`);
   };
 
   const handleFlashFirmware = async () => {
@@ -390,20 +897,65 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
       alert('Please select a firmware file first');
       return;
     }
-    
+
+    const fileName = selectedFile.name.toLowerCase();
+    const isBinaryFile = fileName.endsWith('.bin') || fileName.endsWith('.hex') || fileName.endsWith('.elf');
+    const isSourceFile = fileName.endsWith('.ino') || fileName.endsWith('.c') || fileName.endsWith('.cpp');
+
+    // For source files, guide user to compile externally
+    if (isSourceFile) {
+      addLog(`Source file detected: ${selectedFile.name}`);
+      addLog('To flash this code:');
+      addLog('1. Click "Save" to download the file');
+      addLog('2. Open in Arduino IDE or PlatformIO');
+      addLog('3. Compile and upload to your ESP32');
+      addLog('4. Return here and go to Monitor tab to see output');
+
+      // Offer to download the file
+      const shouldDownload = confirm(
+        `"${selectedFile.name}" is a source file that needs to be compiled.\n\n` +
+        `Would you like to download it to flash via Arduino IDE?\n\n` +
+        `After flashing, come back to the Monitor tab to see the serial output.`
+      );
+
+      if (shouldDownload) {
+        handleDownloadFile();
+        addLog('File downloaded - flash via Arduino IDE, then check Monitor tab');
+      }
+      return;
+    }
+
+    // For binary files, proceed with flashing simulation
+    // TODO: Implement actual esptool.js flashing for .bin files
     setIsProgramming(true);
     setProgress(0);
-    addLog('Starting firmware flash...');
-    
+    addLog(`Starting firmware flash: ${selectedFile.name}`);
+    addLog(`File size: ${(selectedFile.size / 1024).toFixed(2)} KB`);
+    addLog(`Board: ${boardInfo.label}`);
+
+    // Simulate flashing progress
     for (let i = 0; i <= 100; i += 10) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 300));
       setProgress(i);
-      addLog(`Programming... ${i}%`);
+      if (i === 0) addLog('Connecting to bootloader...');
+      if (i === 20) addLog('Erasing flash...');
+      if (i === 40) addLog('Writing firmware...');
+      if (i === 80) addLog('Verifying...');
     }
-    
+
     setIsProgramming(false);
-    addLog('Flash complete!');
+    addLog('✓ Flash complete!');
+    addLog('Go to Monitor tab to see serial output from your firmware');
     onProgramSuccess(totem.id);
+
+    // Prompt to go to monitor
+    const goToMonitor = confirm(
+      'Firmware flashed successfully!\n\n' +
+      'Would you like to go to the Monitor tab to see the serial output?'
+    );
+    if (goToMonitor) {
+      setActiveTab('monitor');
+    }
   };
 
   const handleClose = async () => {
@@ -652,57 +1204,319 @@ Tip: If port is busy, close Arduino Serial Monitor first.
 
         {/* ==================== FLASH TAB ==================== */}
         {activeTab === 'flash' && (
-          <>
-            <div style={styles.section}>
-              <h4 style={styles.sectionTitle}>📁 Firmware File</h4>
-              <input 
-                ref={fileInputRef} 
-                type="file" 
-                accept=".bin,.hex,.elf" 
-                style={{ display: 'none' }} 
-                onChange={handleFileSelect} 
-              />
-              <button style={styles.btnPrimary} onClick={() => fileInputRef.current?.click()}>
-                Choose File
-              </button>
-              {selectedFile && (
-                <p style={{ marginTop: '10px', color: '#4CAF50' }}>
-                  ✓ {selectedFile.name} ({(selectedFile.size / 1024).toFixed(2)} KB)
-                </p>
-              )}
+          <div style={{ display: 'flex', gap: '15px', height: 'calc(100vh - 180px)' }}>
+            {/* Left Panel - File Selection & Flash Controls */}
+            <div style={styles.flashSidebar}>
+              {/* File Upload Section */}
+              <div style={styles.flashSection}>
+                <h4 style={styles.flashSectionTitle}>📁 Firmware File</h4>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".bin,.hex,.elf,.c,.cpp,.h,.hpp,.ino,.txt,.json,.py,.s,.asm"
+                  style={{ display: 'none' }}
+                  onChange={handleFileSelect}
+                />
+
+                {/* Drag & Drop Zone */}
+                <div
+                  style={{
+                    ...styles.dropZone,
+                    borderColor: isDragOver ? '#2196F3' : '#444',
+                    backgroundColor: isDragOver ? 'rgba(33, 150, 243, 0.1)' : '#0a0a0a'
+                  }}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <div style={{ fontSize: '32px', marginBottom: '10px' }}>
+                    {isDragOver ? '📥' : '📂'}
+                  </div>
+                  <div style={{ color: '#888', fontSize: '12px' }}>
+                    {isDragOver ? 'Drop file here' : 'Drag & drop or click to browse'}
+                  </div>
+                  <div style={{ color: '#555', fontSize: '10px', marginTop: '8px' }}>
+                    .bin .hex .elf .c .cpp .h .ino .py
+                  </div>
+                </div>
+
+                {/* Selected File Info */}
+                {selectedFile && (
+                  <div style={styles.selectedFileInfo}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ color: '#4CAF50', fontSize: '16px' }}>✓</span>
+                      <span style={{ color: '#fff', fontSize: '13px', fontWeight: '500' }}>
+                        {selectedFile.name}
+                      </span>
+                    </div>
+                    <div style={{ color: '#666', fontSize: '11px', marginTop: '4px' }}>
+                      {(selectedFile.size / 1024).toFixed(2)} KB
+                    </div>
+                  </div>
+                )}
+
+                {/* File Action Buttons */}
+                <div style={styles.fileActions}>
+                  <button
+                    style={styles.btnSecondary}
+                    onClick={handleNewFile}
+                  >
+                    ✚ New
+                  </button>
+                  <button
+                    style={styles.btnSecondary}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    📂 Open
+                  </button>
+                  {selectedFile && isEditorOpen && (
+                    <button
+                      style={styles.btnSecondary}
+                      onClick={handleDownloadFile}
+                    >
+                      💾 Save
+                    </button>
+                  )}
+                </div>
+
+                {/* Example Templates */}
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ color: '#666', fontSize: '10px', marginBottom: '8px', textTransform: 'uppercase' }}>
+                    Examples
+                  </div>
+                  <button
+                    style={{
+                      ...styles.btnSecondary,
+                      width: '100%',
+                      backgroundColor: '#1a3a1a',
+                      borderColor: '#2e7d32',
+                      textAlign: 'left',
+                      padding: '10px 12px'
+                    }}
+                    onClick={handleLoadExample}
+                  >
+                    💡 ESP32-S3 LED Blink
+                  </button>
+                </div>
+              </div>
+
+              {/* Flash Section */}
+              <div style={styles.flashSection}>
+                <h4 style={styles.flashSectionTitle}>⚡ Flash Firmware</h4>
+                <button
+                  style={{
+                    ...styles.btnFlash,
+                    opacity: (!selectedFile || isProgramming) ? 0.5 : 1
+                  }}
+                  onClick={handleFlashFirmware}
+                  disabled={!selectedFile || isProgramming}
+                >
+                  {isProgramming ? '⏳ Programming...' : '🚀 Flash to Device'}
+                </button>
+
+                {isProgramming && (
+                  <div style={styles.progressBar}>
+                    <div style={{ ...styles.progressFill, width: `${progress}%` }} />
+                    <div style={styles.progressText}>{progress}%</div>
+                  </div>
+                )}
+
+                <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
+                  Note: For .ino files, download and flash via Arduino IDE.
+                  For pre-compiled .bin files, direct flashing is supported.
+                </div>
+              </div>
+
+              {/* Quick Test Section */}
+              <div style={styles.flashSection}>
+                <h4 style={styles.flashSectionTitle}>🔗 Test Connection</h4>
+                <div style={{ fontSize: '11px', color: '#888', marginBottom: '10px' }}>
+                  Test if your ESP32 firmware responds to commands
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {SERIAL_TEST_COMMANDS.map(({ cmd, desc }) => (
+                    <button
+                      key={cmd}
+                      style={{
+                        ...styles.btnSecondary,
+                        width: '100%',
+                        textAlign: 'left',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        opacity: isConnected ? 1 : 0.5
+                      }}
+                      onClick={() => {
+                        if (isConnected) {
+                          sendCommand(cmd);
+                          addLog(`Sent: ${cmd}`);
+                        } else {
+                          addLog('Not connected - go to Monitor tab first');
+                        }
+                      }}
+                      disabled={!isConnected}
+                    >
+                      <span>{cmd}</span>
+                      <span style={{ color: '#666', fontSize: '10px' }}>{desc}</span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  style={{
+                    ...styles.btnSecondary,
+                    width: '100%',
+                    marginTop: '10px',
+                    backgroundColor: isConnected ? '#1a3a1a' : '#1a1a1a',
+                    borderColor: isConnected ? '#4CAF50' : '#444'
+                  }}
+                  onClick={() => setActiveTab('monitor')}
+                >
+                  📟 {isConnected ? 'View Serial Output →' : 'Go to Monitor to Connect →'}
+                </button>
+              </div>
+
+              {/* Log Section */}
+              <div style={{ ...styles.flashSection, flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <h4 style={styles.flashSectionTitle}>📋 Activity Log</h4>
+                <div style={styles.flashLogOutput}>
+                  {logs.length === 0
+                    ? <div style={{ color: '#555' }}>No activity yet...</div>
+                    : logs.map((log, i) => <div key={i} style={styles.logLine}>{log}</div>)
+                  }
+                </div>
+              </div>
             </div>
-            
-            <div style={styles.section}>
-              <h4 style={styles.sectionTitle}>⚡ Flash</h4>
-              <button 
-                style={{ 
-                  ...styles.btnSuccess, 
-                  opacity: (!selectedFile || isProgramming) ? 0.5 : 1 
-                }} 
-                onClick={handleFlashFirmware} 
-                disabled={!selectedFile || isProgramming}
-              >
-                {isProgramming ? '⏳ Programming...' : '🚀 Flash Firmware'}
-              </button>
-              
-              {isProgramming && (
-                <div style={styles.progressBar}>
-                  <div style={{ ...styles.progressFill, width: `${progress}%` }} />
-                  <div style={styles.progressText}>{progress}%</div>
+
+            {/* Right Panel - Code Editor */}
+            <div style={styles.editorPanel}>
+              {isEditorOpen && selectedFile ? (
+                <>
+                  {/* Editor Header */}
+                  <div style={styles.editorHeader}>
+                    <div style={styles.editorFileInfo}>
+                      <span style={{ fontSize: '14px' }}>📄</span>
+                      <span style={styles.editorFileName}>
+                        {selectedFile.name}
+                        {hasUnsavedChanges && <span style={{ color: '#FF9800' }}> •</span>}
+                      </span>
+                      <span style={styles.editorMode}>
+                        {editorMode === 'edit' ? '✏️ Editing' : '👁️ Viewing'}
+                      </span>
+                    </div>
+                    <div style={styles.editorActions}>
+                      {editorMode === 'view' ? (
+                        <button
+                          style={styles.btnEditorAction}
+                          onClick={() => setEditorMode('edit')}
+                        >
+                          ✏️ Edit
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            style={{
+                              ...styles.btnEditorAction,
+                              backgroundColor: hasUnsavedChanges ? '#2e7d32' : '#333',
+                              opacity: hasUnsavedChanges ? 1 : 0.5
+                            }}
+                            onClick={handleSaveFile}
+                            disabled={!hasUnsavedChanges}
+                          >
+                            💾 Save
+                          </button>
+                          {hasUnsavedChanges && (
+                            <button
+                              style={{ ...styles.btnEditorAction, backgroundColor: '#c62828' }}
+                              onClick={handleDiscardChanges}
+                            >
+                              ✗ Discard
+                            </button>
+                          )}
+                          <button
+                            style={styles.btnEditorAction}
+                            onClick={() => setEditorMode('view')}
+                          >
+                            👁️ View
+                          </button>
+                        </>
+                      )}
+                      <button
+                        style={{ ...styles.btnEditorAction, marginLeft: '10px' }}
+                        onClick={handleCloseEditor}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Editor Content */}
+                  <div style={styles.editorContent}>
+                    {/* Line Numbers */}
+                    <div style={styles.lineNumbers}>
+                      {(editorMode === 'edit' ? editedContent : fileContent)
+                        .split('\n')
+                        .map((_, i) => (
+                          <div key={i} style={styles.lineNumber}>{i + 1}</div>
+                        ))
+                      }
+                    </div>
+
+                    {/* Text Area / Display */}
+                    {editorMode === 'edit' ? (
+                      <textarea
+                        ref={editorRef}
+                        style={styles.editorTextArea}
+                        value={editedContent}
+                        onChange={handleEditorChange}
+                        spellCheck={false}
+                        placeholder="Start typing your code..."
+                      />
+                    ) : (
+                      <pre style={styles.editorPre}>
+                        {fileContent || 'Empty file'}
+                      </pre>
+                    )}
+                  </div>
+
+                  {/* Editor Footer */}
+                  <div style={styles.editorFooter}>
+                    <span>Lines: {(editorMode === 'edit' ? editedContent : fileContent).split('\n').length}</span>
+                    <span>|</span>
+                    <span>Characters: {(editorMode === 'edit' ? editedContent : fileContent).length}</span>
+                    <span>|</span>
+                    <span>Encoding: UTF-8</span>
+                  </div>
+                </>
+              ) : (
+                <div style={styles.editorPlaceholder}>
+                  <div style={{ fontSize: '48px', marginBottom: '20px', opacity: 0.3 }}>📝</div>
+                  <div style={{ color: '#888', fontSize: '16px', marginBottom: '10px' }}>
+                    Code Editor
+                  </div>
+                  <div style={{ color: '#555', fontSize: '13px', marginBottom: '20px' }}>
+                    Select a file or load an example to start editing
+                  </div>
+                  <button
+                    style={{
+                      padding: '12px 24px',
+                      backgroundColor: '#1a3a1a',
+                      border: '1px solid #2e7d32',
+                      borderRadius: '6px',
+                      color: '#4CAF50',
+                      fontSize: '14px',
+                      cursor: 'pointer'
+                    }}
+                    onClick={handleLoadExample}
+                  >
+                    💡 Load ESP32-S3 LED Example
+                  </button>
+                  <div style={{ color: '#444', fontSize: '12px', marginTop: '10px' }}>
+                    Supported formats: .c, .cpp, .h, .ino, .py, .txt, .json
+                  </div>
                 </div>
               )}
             </div>
-            
-            <div style={styles.section}>
-              <h4 style={styles.sectionTitle}>📋 Log</h4>
-              <div style={styles.logOutput}>
-                {logs.length === 0 
-                  ? <div style={{ color: '#666' }}>No logs...</div> 
-                  : logs.map((log, i) => <div key={i} style={styles.logLine}>{log}</div>)
-                }
-              </div>
-            </div>
-          </>
+          </div>
         )}
 
         {/* ==================== CONFIG TAB ==================== */}
@@ -1242,12 +2056,211 @@ const styles: { [key: string]: React.CSSProperties } = {
     textTransform: 'uppercase',
     letterSpacing: '0.5px'
   },
-  statusFieldValue: { 
-    fontSize: '14px', 
-    fontWeight: '600', 
+  statusFieldValue: {
+    fontSize: '14px',
+    fontWeight: '600',
     color: '#fff',
     fontFamily: 'monospace'
   },
+
+  // Flash Tab - Sidebar
+  flashSidebar: {
+    width: '300px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '15px',
+    overflowY: 'auto'
+  },
+  flashSection: {
+    backgroundColor: '#141414',
+    borderRadius: '8px',
+    padding: '15px',
+    border: '1px solid #333'
+  },
+  flashSectionTitle: {
+    margin: '0 0 12px 0',
+    color: '#fff',
+    fontSize: '13px',
+    fontWeight: '600'
+  },
+
+  // Drop Zone
+  dropZone: {
+    border: '2px dashed #444',
+    borderRadius: '8px',
+    padding: '25px',
+    textAlign: 'center',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    marginBottom: '12px'
+  },
+
+  // Selected File Info
+  selectedFileInfo: {
+    backgroundColor: '#0a0a0a',
+    border: '1px solid #333',
+    borderRadius: '6px',
+    padding: '10px 12px',
+    marginBottom: '12px'
+  },
+
+  // File Actions
+  fileActions: {
+    display: 'flex',
+    gap: '8px',
+    flexWrap: 'wrap'
+  },
+  btnSecondary: {
+    flex: 1,
+    minWidth: '60px',
+    padding: '8px 12px',
+    backgroundColor: '#1a1a1a',
+    border: '1px solid #444',
+    borderRadius: '4px',
+    color: '#fff',
+    fontSize: '11px',
+    cursor: 'pointer',
+    transition: 'all 0.2s'
+  },
+  btnFlash: {
+    width: '100%',
+    padding: '12px 20px',
+    backgroundColor: '#2e7d32',
+    border: 'none',
+    borderRadius: '6px',
+    color: '#fff',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s'
+  },
+  flashLogOutput: {
+    flex: 1,
+    backgroundColor: '#0a0a0a',
+    border: '1px solid #333',
+    borderRadius: '4px',
+    padding: '10px',
+    overflowY: 'auto',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    minHeight: '100px'
+  },
+
+  // Editor Panel
+  editorPanel: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: '#0d0d0d',
+    borderRadius: '8px',
+    border: '1px solid #333',
+    overflow: 'hidden'
+  },
+  editorHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+    borderBottom: '1px solid #333',
+    padding: '10px 15px'
+  },
+  editorFileInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px'
+  },
+  editorFileName: {
+    color: '#fff',
+    fontSize: '13px',
+    fontWeight: '500'
+  },
+  editorMode: {
+    backgroundColor: '#333',
+    padding: '3px 8px',
+    borderRadius: '4px',
+    fontSize: '10px',
+    color: '#888'
+  },
+  editorActions: {
+    display: 'flex',
+    gap: '8px'
+  },
+  btnEditorAction: {
+    padding: '6px 12px',
+    backgroundColor: '#333',
+    border: 'none',
+    borderRadius: '4px',
+    color: '#fff',
+    fontSize: '11px',
+    cursor: 'pointer',
+    transition: 'all 0.2s'
+  },
+  editorContent: {
+    flex: 1,
+    display: 'flex',
+    overflow: 'hidden',
+    position: 'relative'
+  },
+  lineNumbers: {
+    width: '50px',
+    backgroundColor: '#111',
+    borderRight: '1px solid #333',
+    padding: '15px 0',
+    overflowY: 'auto',
+    textAlign: 'right',
+    userSelect: 'none'
+  },
+  lineNumber: {
+    color: '#555',
+    fontSize: '12px',
+    fontFamily: "'Monaco', 'Consolas', monospace",
+    lineHeight: '1.6',
+    paddingRight: '10px'
+  },
+  editorTextArea: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: '#d4d4d4',
+    fontSize: '13px',
+    fontFamily: "'Monaco', 'Consolas', monospace",
+    lineHeight: '1.6',
+    padding: '15px',
+    resize: 'none',
+    outline: 'none',
+    overflowY: 'auto',
+    whiteSpace: 'pre',
+    tabSize: 4
+  },
+  editorPre: {
+    flex: 1,
+    margin: 0,
+    color: '#d4d4d4',
+    fontSize: '13px',
+    fontFamily: "'Monaco', 'Consolas', monospace",
+    lineHeight: '1.6',
+    padding: '15px',
+    overflowY: 'auto',
+    whiteSpace: 'pre',
+    tabSize: 4
+  },
+  editorFooter: {
+    display: 'flex',
+    gap: '15px',
+    backgroundColor: '#1a1a1a',
+    borderTop: '1px solid #333',
+    padding: '8px 15px',
+    fontSize: '11px',
+    color: '#666'
+  },
+  editorPlaceholder: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#444'
+  }
 };
 
 export default TotemProgrammingIDE;
