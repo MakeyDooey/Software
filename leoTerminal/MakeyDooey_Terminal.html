@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MakeyDooey ESP32/Nucleo Terminal</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: 'Monaco', 'Consolas', monospace; 
+            background: #0a0a0a; 
+            color: #0f0; 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+        }
+        
+        .header {
+            background: linear-gradient(180deg, #1a1a1a 0%, #111 100%);
+            padding: 12px 20px;
+            border-bottom: 2px solid #333;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 16px;
+            color: #fff;
+            font-weight: 600;
+        }
+        
+        .header .status {
+            margin-left: auto;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .status.connected { background: #1b5e20; color: #4caf50; }
+        .status.disconnected { background: #4a1515; color: #f44336; }
+        
+        .controls { 
+            background: #1a1a1a; 
+            padding: 12px 20px; 
+            border-bottom: 1px solid #333; 
+            display: flex; 
+            gap: 12px; 
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        button { 
+            padding: 8px 16px; 
+            background: #333; 
+            color: white; 
+            border: 1px solid #555; 
+            cursor: pointer; 
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        
+        button:hover { background: #444; border-color: #666; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        button.connect { background: #2e7d32; border-color: #4caf50; }
+        button.connect:hover { background: #388e3c; }
+        button.disconnect { background: #c62828; border-color: #f44336; }
+        button.disconnect:hover { background: #d32f2f; }
+        button.send { background: #1565c0; border-color: #2196f3; }
+        button.send:hover { background: #1976d2; }
+        
+        select, input[type="number"], input[type="text"] { 
+            padding: 8px 12px; 
+            background: #222; 
+            color: #fff; 
+            border: 1px solid #444; 
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+        
+        select:focus, input:focus {
+            outline: none;
+            border-color: #2196f3;
+        }
+        
+        .main { 
+            display: flex; 
+            flex: 1; 
+            overflow: hidden; 
+        }
+        
+        .sidebar { 
+            width: 300px; 
+            background: #141414; 
+            border-right: 1px solid #333; 
+            padding: 15px; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 12px;
+            overflow-y: auto;
+        }
+        
+        .sidebar h3 {
+            margin: 0 0 5px 0;
+            font-size: 13px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .terminal-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #000;
+        }
+        
+        .terminal { 
+            flex: 1; 
+            background: #000; 
+            padding: 15px; 
+            white-space: pre-wrap; 
+            overflow-y: auto; 
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        .terminal .rx { color: #4caf50; }
+        .terminal .tx { color: #2196f3; }
+        .terminal .info { color: #888; }
+        .terminal .error { color: #f44336; }
+        .terminal .debug { color: #ff9800; }
+        
+        .input-row {
+            display: flex;
+            border-top: 1px solid #333;
+        }
+        
+        .input-row input {
+            flex: 1;
+            padding: 12px 15px;
+            background: #111;
+            border: none;
+            color: #0f0;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        
+        .input-row input:focus {
+            outline: none;
+            background: #1a1a1a;
+        }
+        
+        .input-row button {
+            border-radius: 0;
+            border-left: 1px solid #333;
+        }
+        
+        .input-group { 
+            background: #1a1a1a; 
+            padding: 10px; 
+            border: 1px solid #333; 
+            border-radius: 4px;
+        }
+        
+        .input-group label { 
+            display: block; 
+            color: #666; 
+            font-size: 11px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+        
+        .input-group input, .input-group select { 
+            width: 100%; 
+            background: #000; 
+            border-color: #333;
+        }
+        
+        .command-desc {
+            font-size: 11px;
+            color: #666;
+            margin-top: 8px;
+            padding: 8px;
+            background: #0a0a0a;
+            border-radius: 4px;
+        }
+        
+        .quick-btns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        
+        .quick-btns button {
+            font-size: 11px;
+            padding: 6px 8px;
+        }
+        
+        hr {
+            border: none;
+            border-top: 1px solid #333;
+            margin: 10px 0;
+        }
+        
+        .label { 
+            color: #888; 
+            font-size: 12px; 
+        }
+        
+        .byte-counter {
+            font-size: 11px;
+            color: #666;
+            padding: 8px;
+            background: #111;
+            border-radius: 4px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>🔧 MakeyDooey Terminal</h1>
+    <span>ESP32 / Nucleo CLI</span>
+    <div class="status disconnected" id="statusBadge">● Disconnected</div>
+</div>
+
+<div class="controls">
+    <button id="btnConnect" class="connect">🔌 Connect</button>
+    
+    <select id="baudRate">
+        <option value="115200" selected>115200 baud</option>
+        <option value="9600">9600 baud</option>
+        <option value="57600">57600 baud</option>
+    </select>
+    
+    <span class="label">Delay:</span>
+    <input type="number" id="charDelay" value="10" style="width:60px;" min="0" max="100">
+    <span class="label">ms</span>
+    
+    <select id="lineEnding">
+        <option value="\r">\r (CR)</option>
+        <option value="\n">\n (LF)</option>
+        <option value="\r\n">\r\n (CRLF)</option>
+    </select>
+    
+    <button id="btnClear">🗑️ Clear</button>
+    <button id="btnTimestamp">🕐 Timestamps</button>
+    
+    <div class="byte-counter" id="byteCounter">TX: 0 | RX: 0</div>
+</div>
+
+<div class="main">
+    <div class="sidebar">
+        <h3>Command Builder</h3>
+        
+        <div class="input-group">
+            <label>Command</label>
+            <select id="cmdSelect"></select>
+        </div>
+        
+        <div id="paramContainer"></div>
+        
+        <div class="command-desc" id="cmdDesc"></div>
+        
+        <button id="btnSend" class="send" style="width:100%;" disabled>
+            📤 Send Command
+        </button>
+        
+        <hr>
+        
+        <h3>Quick Commands</h3>
+        <div class="quick-btns">
+            <button class="quick-cmd" data-cmd="hello">hello</button>
+            <button class="quick-cmd" data-cmd="toggle-led">toggle-led</button>
+            <button class="quick-cmd" data-cmd="get_pid">get_pid</button>
+            <button class="quick-cmd" data-cmd="status">status</button>
+            <button class="quick-cmd" data-cmd="help">help</button>
+            <button class="quick-cmd" data-cmd="blink">blink</button>
+        </div>
+        
+        <hr>
+        
+        <h3>Settings</h3>
+        
+        <div class="input-group">
+            <label>Char Delay (ms)</label>
+            <input type="number" id="charDelayInput" value="10" min="0" max="100">
+        </div>
+        
+        <div class="input-group">
+            <label>Line Ending</label>
+            <select id="lineEndingSelect">
+                <option value="\r">\r (CR) - Default</option>
+                <option value="\n">\n (LF)</option>
+                <option value="\r\n">\r\n (CRLF)</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="terminal-container">
+        <div class="terminal" id="termOutput"></div>
+        
+        <div class="input-row">
+            <input type="text" id="manualInput" placeholder="Type command and press Enter..." disabled>
+            <button id="btnSendManual" disabled>Send</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // =========================================================================
+    // CONFIGURATION
+    // =========================================================================
+    
+    const COMMANDS = {
+        "hello": { 
+            params: [], 
+            desc: "Test connection - should return 'Hello, World!'" 
+        },
+        "toggle-led": { 
+            params: [], 
+            desc: "Toggle the LED on/off" 
+        },
+        "echo_send": { 
+            params: [{ label: "String", val: "test123" }], 
+            desc: "Echo test - sends and receives back" 
+        },
+        "set_pid": { 
+            params: [
+                { label: "Kp", val: "1.0" }, 
+                { label: "Ki", val: "0.0" }, 
+                { label: "Kd", val: "0.0" }, 
+                { label: "Mode", val: "1" }
+            ],
+            desc: "Set PID controller parameters"
+        },
+        "get_pid": { 
+            params: [], 
+            desc: "Get current PID values" 
+        },
+        "status": { 
+            params: [], 
+            desc: "Get system status" 
+        },
+        "help": { 
+            params: [], 
+            desc: "List available commands" 
+        },
+        "blink": { 
+            params: [], 
+            desc: "Blink LED 5 times" 
+        },
+        "led-on": { 
+            params: [], 
+            desc: "Turn LED on" 
+        },
+        "led-off": { 
+            params: [], 
+            desc: "Turn LED off" 
+        }
+    };
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
+    
+    let port = null;
+    let writer = null;
+    let reader = null;
+    let txBytes = 0;
+    let rxBytes = 0;
+    let showTimestamps = false;
+    
+    // =========================================================================
+    // DOM REFERENCES
+    // =========================================================================
+    
+    const ui = {
+        connect: document.getElementById('btnConnect'),
+        send: document.getElementById('btnSend'),
+        sendManual: document.getElementById('btnSendManual'),
+        term: document.getElementById('termOutput'),
+        select: document.getElementById('cmdSelect'),
+        params: document.getElementById('paramContainer'),
+        manual: document.getElementById('manualInput'),
+        delay: document.getElementById('charDelay'),
+        delayInput: document.getElementById('charDelayInput'),
+        lineEnding: document.getElementById('lineEnding'),
+        lineEndingSelect: document.getElementById('lineEndingSelect'),
+        clear: document.getElementById('btnClear'),
+        timestamp: document.getElementById('btnTimestamp'),
+        status: document.getElementById('statusBadge'),
+        byteCounter: document.getElementById('byteCounter'),
+        cmdDesc: document.getElementById('cmdDesc')
+    };
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+    
+    // Populate command select
+    Object.keys(COMMANDS).forEach(c => {
+        ui.select.add(new Option(c, c));
+    });
+    
+    // Initial render
+    renderParams();
+    updateByteCounter();
+    
+    // Event listeners
+    ui.select.addEventListener('change', renderParams);
+    ui.clear.addEventListener('click', clearTerminal);
+    ui.timestamp.addEventListener('click', toggleTimestamps);
+    ui.connect.addEventListener('click', toggleConnection);
+    ui.send.addEventListener('click', sendBuilderCommand);
+    ui.sendManual.addEventListener('click', () => sendManualCommand());
+    ui.manual.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendManualCommand();
+    });
+    
+    // Sync delay inputs
+    ui.delay.addEventListener('change', () => {
+        ui.delayInput.value = ui.delay.value;
+    });
+    ui.delayInput.addEventListener('change', () => {
+        ui.delay.value = ui.delayInput.value;
+    });
+    
+    // Sync line ending selects
+    ui.lineEnding.addEventListener('change', () => {
+        ui.lineEndingSelect.value = ui.lineEnding.value;
+    });
+    ui.lineEndingSelect.addEventListener('change', () => {
+        ui.lineEnding.value = ui.lineEndingSelect.value;
+    });
+    
+    // Quick command buttons
+    document.querySelectorAll('.quick-cmd').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (port) sendData(btn.dataset.cmd);
+        });
+    });
+
+    // =========================================================================
+    // UI FUNCTIONS
+    // =========================================================================
+    
+    function renderParams() {
+        const cmd = COMMANDS[ui.select.value];
+        ui.params.innerHTML = '';
+        
+        cmd.params.forEach((p, i) => {
+            ui.params.innerHTML += `
+                <div class="input-group">
+                    <label>${p.label}</label>
+                    <input id="p${i}" value="${p.val}">
+                </div>
+            `;
+        });
+        
+        ui.cmdDesc.textContent = cmd.desc;
+    }
+    
+    function clearTerminal() {
+        ui.term.innerHTML = '';
+        log('info', 'Terminal cleared');
+    }
+    
+    function toggleTimestamps() {
+        showTimestamps = !showTimestamps;
+        ui.timestamp.style.background = showTimestamps ? '#1565c0' : '#333';
+        log('info', `Timestamps ${showTimestamps ? 'enabled' : 'disabled'}`);
+    }
+    
+    function updateByteCounter() {
+        ui.byteCounter.textContent = `TX: ${txBytes} | RX: ${rxBytes}`;
+    }
+    
+    function log(type, message) {
+        const timestamp = showTimestamps ? `[${new Date().toLocaleTimeString()}] ` : '';
+        const line = document.createElement('div');
+        line.className = type;
+        line.textContent = timestamp + message;
+        ui.term.appendChild(line);
+        ui.term.scrollTop = ui.term.scrollHeight;
+    }
+    
+    function setConnected(connected) {
+        if (connected) {
+            ui.status.textContent = '● Connected';
+            ui.status.className = 'status connected';
+            ui.connect.textContent = '❌ Disconnect';
+            ui.connect.className = 'disconnect';
+            ui.send.disabled = false;
+            ui.sendManual.disabled = false;
+            ui.manual.disabled = false;
+        } else {
+            ui.status.textContent = '● Disconnected';
+            ui.status.className = 'status disconnected';
+            ui.connect.textContent = '🔌 Connect';
+            ui.connect.className = 'connect';
+            ui.send.disabled = true;
+            ui.sendManual.disabled = true;
+            ui.manual.disabled = true;
+        }
+    }
+
+    // =========================================================================
+    // CONNECTION
+    // =========================================================================
+    
+    async function toggleConnection() {
+        if (port) {
+            await disconnect();
+        } else {
+            await connect();
+        }
+    }
+    
+    async function connect() {
+        try {
+            log('info', 'Requesting serial port...');
+            
+            port = await navigator.serial.requestPort();
+            
+            const baudRate = parseInt(document.getElementById('baudRate').value);
+            log('info', `Opening port at ${baudRate} baud...`);
+            
+            await port.open({ baudRate: baudRate });
+            
+            // Set DTR/RTS (critical for some boards)
+            try {
+                await port.setSignals({ 
+                    dataTerminalReady: true, 
+                    requestToSend: true 
+                });
+                log('info', 'DTR/RTS signals set');
+            } catch (e) {
+                log('debug', `DTR/RTS warning: ${e.message}`);
+            }
+            
+            // Setup streams (Leo's proven approach)
+            const enc = new TextEncoderStream();
+            enc.readable.pipeTo(port.writable);
+            writer = enc.writable.getWriter();
+
+            const dec = new TextDecoderStream();
+            port.readable.pipeTo(dec.writable);
+            reader = dec.readable.getReader();
+            
+            setConnected(true);
+            log('info', '✓ Connected! Try typing "hello"');
+            
+            // Start read loop
+            readLoop();
+            
+        } catch (e) {
+            log('error', `Connection failed: ${e.message}`);
+            port = null;
+            setConnected(false);
+        }
+    }
+    
+    async function disconnect() {
+        try {
+            if (reader) {
+                await reader.cancel();
+                reader = null;
+            }
+            if (writer) {
+                await writer.close();
+                writer = null;
+            }
+            if (port) {
+                await port.close();
+                port = null;
+            }
+            
+            setConnected(false);
+            log('info', 'Disconnected');
+            
+        } catch (e) {
+            log('error', `Disconnect error: ${e.message}`);
+            port = null;
+            setConnected(false);
+        }
+    }
+    
+    async function readLoop() {
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value) {
+                    rxBytes += value.length;
+                    updateByteCounter();
+                    
+                    // Append to terminal (preserve formatting)
+                    const span = document.createElement('span');
+                    span.className = 'rx';
+                    span.textContent = value;
+                    ui.term.appendChild(span);
+                    ui.term.scrollTop = ui.term.scrollHeight;
+                }
+            }
+        } catch (error) {
+            if (!error.message.includes('cancelled')) {
+                log('error', `Read error: ${error.message}`);
+            }
+        }
+    }
+
+    // =========================================================================
+    // SENDING DATA
+    // =========================================================================
+    
+    async function sendData(str) {
+        if (!writer) {
+            log('error', 'Not connected');
+            return;
+        }
+        
+        // Get line ending
+        let end = ui.lineEnding.value;
+        end = end.replace('\\r', '\r').replace('\\n', '\n');
+        
+        const payload = str + end;
+        const delayMs = parseInt(ui.delay.value) || 10;
+        
+        log('tx', `> ${str}`);
+        
+        try {
+            // Send character by character with delay (prevents UART overrun)
+            for (const char of payload) {
+                await writer.write(char);
+                txBytes++;
+                if (delayMs > 0) {
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
+            }
+            updateByteCounter();
+            
+        } catch (e) {
+            log('error', `Send error: ${e.message}`);
+        }
+    }
+    
+    function sendBuilderCommand() {
+        let cmd = ui.select.value;
+        
+        COMMANDS[cmd].params.forEach((p, i) => {
+            const input = document.getElementById(`p${i}`);
+            if (input) {
+                cmd += ' ' + input.value;
+            }
+        });
+        
+        sendData(cmd);
+    }
+    
+    function sendManualCommand() {
+        const cmd = ui.manual.value.trim();
+        if (cmd) {
+            sendData(cmd);
+            ui.manual.value = '';
+        }
+    }
+
+    // =========================================================================
+    // STARTUP MESSAGE
+    // =========================================================================
+    
+    log('info', '========================================');
+    log('info', '  MakeyDooey ESP32/Nucleo Terminal');
+    log('info', '========================================');
+    log('info', '');
+    log('info', '1. Click "Connect" and select your device');
+    log('info', '2. Type "hello" to test connection');
+    log('info', '3. Use Command Builder or Quick Commands');
+    log('info', '');
+    log('info', 'Tip: Open Arduino Serial Monitor at the');
+    log('info', 'same time to see debug output from ESP32');
+    log('info', '');
+</script>
+
+</body>
+</html>
