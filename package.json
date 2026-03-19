@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "homepage": "https://<your-username>.github.io/<your-repo-name>/",
   "main": "public/electron.cjs",
   "scripts": {
     "dev": "vite",
