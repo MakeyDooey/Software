@@ -15,16 +15,17 @@ export default defineConfig({
         theme_color: '#1e1e1e',
         background_color: '#1e1e1e',
         display: 'standalone',
-        scope: '/',
-        start_url: '/',
+        // Update these to match your repo name
+        scope: '/controller-app-web/', 
+        start_url: '/controller-app-web/',
         icons: [
           {
-            src: '/vite.svg',
+            src: 'vite.svg', // Remove the leading slash for relative paths
             sizes: '192x192',
             type: 'image/svg+xml'
           },
           {
-            src: '/vite.svg',
+            src: 'vite.svg',
             sizes: '512x512',
             type: 'image/svg+xml',
             purpose: 'any maskable'
@@ -36,5 +37,6 @@ export default defineConfig({
       }
     })
   ],
-  base: './'
+  // Change './' to your specific repo name for GitHub Pages
+  base: '/controller-app-web/' 
 });
