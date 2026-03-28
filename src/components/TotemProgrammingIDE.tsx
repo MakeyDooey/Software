@@ -1747,13 +1747,14 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
     backgroundColor: tok.pageBg, zIndex: 1000,
     display: 'flex', flexDirection: 'column',
     fontFamily: "'Nunito', 'Helvetica Neue', sans-serif",
+    transition: 'background 0.3s',
   },
   header: {
     background: tok.cardBg,
-    backdropFilter: 'blur(10px)',
-    borderBottom: '1.5px solid rgba(235,121,35,0.18)',
+    borderBottom: `1.5px solid ${tok.border}`,
     padding: '12px 20px',
     boxShadow: tok.shadow,
+    transition: 'background 0.3s',
   },
   headerContent: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   title: { margin: 0, color: tok.textPrimary, fontSize: '16px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
@@ -1773,7 +1774,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
     borderBottom: '2px solid transparent', transition: 'color 0.15s',
   },
   tabActive: { color: tok.orange, borderBottomColor: '#EB7923' },
-  content: { flex: 1, overflow: 'auto', padding: '15px', background: '#fdf6ee' },
+  content: { flex: 1, overflow: 'auto', padding: '15px', background: tok.pageBg },
 
   // Sidebar (legacy - kept for compat)
   sidebar: {
@@ -1840,12 +1841,12 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   },
   baudSelect: {
     padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(235,121,35,0.2)', borderRadius: '6px',
+    border: `1px solid ${tok.border}`, borderRadius: '6px',
     color: tok.textPrimary, fontSize: '13px',
   },
   btnSmall: {
     padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.07)',
-    border: '1px solid rgba(235,121,35,0.2)', borderRadius: '6px',
+    border: `1px solid ${tok.border}`, borderRadius: '6px',
     color: tok.textPrimary, fontSize: '12px', cursor: 'pointer',
   },
   connectionStatus: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
@@ -1855,7 +1856,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
     fontFamily: "'DM Mono', 'Monaco', 'Consolas', monospace", lineHeight: '1.5',
     background: 'transparent',
   },
-  inputRow: { display: 'flex', borderTop: '1px solid rgba(235,121,35,0.15)' },
+  inputRow: { display: 'flex', borderTop: `1px solid ${tok.border}` },
   manualInput: {
     flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg,
     border: 'none', color: tok.termText, fontSize: '14px',
@@ -1863,7 +1864,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   },
   btnInputSend: {
     padding: '12px 20px', backgroundColor: tok.orange,
-    border: 'none', borderLeft: '1px solid rgba(235,121,35,0.2)',
+    border: 'none', borderLeft: `1px solid ${tok.border}`,
     color: tok.textOnOrange, fontSize: '13px', cursor: 'pointer',
     fontWeight: '700', fontFamily: "'Nunito', sans-serif",
   },
@@ -1882,7 +1883,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
     backgroundColor: tok.orange, color: 'white', border: 'none',
     padding: '10px 20px', borderRadius: '8px', fontSize: '13px',
     fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif",
-    boxShadow: '0 2px 8px rgba(235,121,35,0.28)',
+    boxShadow: `0 2px 8px ${tok.orangeSubtle}`,
   },
   btnSuccess: {
     backgroundColor: tok.green, color: 'white', border: 'none',
@@ -1935,7 +1936,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
     fontWeight: '800', fontFamily: "'Nunito', sans-serif",
   },
   dropZone: {
-    border: '2px dashed rgba(235,121,35,0.35)', borderRadius: '10px',
+    border: `2px dashed ${tok.border}`, borderRadius: '10px',
     padding: '25px', textAlign: 'center', cursor: 'pointer',
     transition: 'all 0.2s', marginBottom: '12px', backgroundColor: tok.orangeFaint,
   },
@@ -1981,7 +1982,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   editorMode: {
     backgroundColor: tok.orangeFaint, padding: '3px 8px', borderRadius: '6px',
     fontSize: '10px', color: tok.orangeText, fontWeight: '700',
-    border: '1px solid rgba(235,121,35,0.2)',
+    border: `1px solid ${tok.border}`,
   },
   editorActions: { display: 'flex', gap: '8px' },
   btnEditorAction: {
@@ -2025,7 +2026,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   // Block sequencer panel
   blockPanel: {
     width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column',
-    backgroundColor: tok.cardBg,
+    backgroundColor: tok.panelBg,
     borderRight: `1.5px solid ${tok.border}`, overflow: 'hidden',
   },
   blockPanelHeader: {
@@ -2035,7 +2036,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   },
   sequenceNameInput: {
     backgroundColor: 'transparent', border: 'none',
-    borderBottom: '1.5px solid rgba(235,121,35,0.2)', color: tok.textPrimary,
+    borderBottom: `1.5px solid ${tok.border}`, color: tok.textPrimary,
     fontSize: '13px', fontWeight: '700', fontFamily: "'Nunito', sans-serif",
     outline: 'none', padding: '2px 0', width: '100%',
   },
@@ -2079,7 +2080,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   },
   btnAddBlock: {
     width: '100%', padding: '8px',
-    backgroundColor: tok.orangeFaint, border: '1.5px dashed rgba(235,121,35,0.3)',
+    backgroundColor: tok.orangeFaint, border: `1.5px dashed ${tok.border}`,
     borderRadius: '8px', color: tok.orange, fontSize: '12px',
     cursor: 'pointer', minHeight: '36px', fontWeight: '700',
     fontFamily: "'Nunito', sans-serif",
@@ -2093,7 +2094,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   addMenuOption: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '9px 12px', backgroundColor: 'transparent', border: 'none',
-    borderBottom: '1px solid rgba(235,121,35,0.08)', color: tok.textPrimary,
+    borderBottom: `1px solid ${tok.borderSubtle}`, color: tok.textPrimary,
     fontSize: '12px', cursor: 'pointer', textAlign: 'left' as const,
     gap: '8px', minHeight: '38px', fontFamily: "'Nunito', sans-serif",
   },
@@ -2119,7 +2120,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
     fontFamily: "'DM Mono', 'Monaco', monospace",
   },
   blockSettings: {
-    padding: '8px', borderTop: '1.5px solid rgba(235,121,35,0.08)',
+    padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`,
     display: 'flex', flexDirection: 'column' as const, gap: '5px',
   },
   settingsSelect: {
@@ -2141,7 +2142,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   cmdRefRow: {
     display: 'grid', gridTemplateColumns: '70px 1fr', gridTemplateRows: 'auto auto',
     gap: '0 6px', padding: '6px 8px', background: tok.orangeFaint,
-    border: '1.5px solid rgba(235,121,35,0.1)', borderRadius: '7px',
+    border: `1.5px solid ${tok.borderSubtle}`, borderRadius: '7px',
     cursor: 'pointer', textAlign: 'left' as const, transition: 'background 0.1s',
     fontFamily: "'Nunito', sans-serif",
   },
