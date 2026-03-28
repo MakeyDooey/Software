@@ -4,6 +4,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { TotemStatus } from '../types/totem';
 import usbService from '../services/usbService';
+import { useTheme, T } from '../theme/ThemeContext';
+
+interface CommandBlock {
+  id: string;
+  type: 'cmd' | 'delay' | 'waitfor';
+  command?: string;
+  params?: string[];
+  delayMs?: number;
+  matchStr?: string;
+  timeoutMs?: number;
+}
 
 interface TotemProgrammingIDEProps {
   totem: TotemStatus;
@@ -16,7 +27,10 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   onClose,
   onProgramSuccess
 }) => {
-  const [activeTab, setActiveTab] = useState<'flash' | 'config' | 'monitor' | 'debug'>('monitor');
+  const { dark } = useTheme();
+  const tok = T(dark);
+  const styles = buildStyles(tok);
+  const [activeTab, setActiveTab] = useState<'flash' | 'monitor'>('monitor');
   
   // Flash tab state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -55,7 +69,16 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   // Stats
   const [txBytes, setTxBytes] = useState(0);
   const [rxBytes, setRxBytes] = useState(0);
-  
+
+  // Block sequencer state
+  const [blocks, setBlocks] = useState<CommandBlock[]>([]);
+  const [sequenceName, setSequenceName] = useState('My Sequence');
+  const [isRunningSequence, setIsRunningSequence] = useState(false);
+  const [blockStatuses, setBlockStatuses] = useState<Record<string, 'idle' | 'running' | 'done' | 'error'>>({});
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const stopSequenceRef = useRef(false);
+  const termOutputRef = useRef('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Command definitions matching firmware (works for both ESP32 and Nucleo)
@@ -180,8 +203,129 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     };
   }, []);
 
+  // Load blocks from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('makeydooey-blocks');
+      const savedName = localStorage.getItem('makeydooey-sequence-name');
+      if (saved) setBlocks(JSON.parse(saved));
+      if (savedName) setSequenceName(savedName);
+    } catch { /* ignore corrupt storage */ }
+  }, []);
+
+  // Persist blocks to localStorage on change
+  useEffect(() => {
+    localStorage.setItem('makeydooey-blocks', JSON.stringify(blocks));
+  }, [blocks]);
+
+  useEffect(() => {
+    localStorage.setItem('makeydooey-sequence-name', sequenceName);
+  }, [sequenceName]);
+
   const appendToTerminal = (text: string) => {
+    termOutputRef.current += text;
     setTermOutput(prev => prev + text);
+  };
+
+  // =====================================================
+  // BLOCK SEQUENCER HELPERS
+  // =====================================================
+  const generateId = () => Math.random().toString(36).slice(2, 9);
+
+  const addBlock = (type: CommandBlock['type']) => {
+    const newBlock: CommandBlock = type === 'cmd'
+      ? { id: generateId(), type: 'cmd', command: 'hello', params: [] }
+      : type === 'delay'
+      ? { id: generateId(), type: 'delay', delayMs: 500 }
+      : { id: generateId(), type: 'waitfor', matchStr: 'Ready', timeoutMs: 3000 };
+    setBlocks(prev => [...prev, newBlock]);
+    setShowAddMenu(false);
+  };
+
+  const removeBlock = (id: string) => setBlocks(prev => prev.filter(b => b.id !== id));
+
+  const moveBlock = (id: string, dir: -1 | 1) => {
+    setBlocks(prev => {
+      const idx = prev.findIndex(b => b.id === id);
+      if (idx < 0) return prev;
+      const next = idx + dir;
+      if (next < 0 || next >= prev.length) return prev;
+      const arr = [...prev];
+      [arr[idx], arr[next]] = [arr[next], arr[idx]];
+      return arr;
+    });
+  };
+
+  const updateBlock = (id: string, patch: Partial<CommandBlock>) => {
+    setBlocks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b));
+  };
+
+  // =====================================================
+  // SEQUENCE EXECUTION ENGINE
+  // =====================================================
+  const waitForResponse = (match: string, timeoutMs: number): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const check = () => {
+        if (stopSequenceRef.current) { reject(new Error('Stopped')); return; }
+        if (termOutputRef.current.includes(match)) { resolve(); return; }
+        if (Date.now() - start > timeoutMs) { reject(new Error(`Timeout waiting for "${match}"`)); return; }
+        setTimeout(check, 100);
+      };
+      check();
+    });
+  };
+
+  const runSequence = async () => {
+    if (!isConnected) { appendToTerminal('[Not connected — click Connect first]\n'); return; }
+    if (blocks.length === 0) { appendToTerminal('[No blocks in sequence]\n'); return; }
+
+    stopSequenceRef.current = false;
+    setIsRunningSequence(true);
+    const initial: Record<string, 'idle' | 'running' | 'done' | 'error'> = {};
+    blocks.forEach(b => { initial[b.id] = 'idle'; });
+    setBlockStatuses(initial);
+
+    appendToTerminal(`\n[▶ Running sequence: ${sequenceName}]\n`);
+
+    for (const block of blocks) {
+      if (stopSequenceRef.current) {
+        appendToTerminal('[■ Sequence stopped]\n');
+        break;
+      }
+      setBlockStatuses(prev => ({ ...prev, [block.id]: 'running' }));
+      try {
+        if (block.type === 'cmd') {
+          const cmd = (block.params && block.params.filter(Boolean).length > 0)
+            ? `${block.command} ${block.params.join(' ')}`
+            : block.command!;
+          await sendCommand(cmd);
+          await new Promise(r => setTimeout(r, 150));
+        } else if (block.type === 'delay') {
+          appendToTerminal(`[DELAY ${block.delayMs}ms]\n`);
+          await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(resolve, block.delayMs ?? 500);
+            const poll = setInterval(() => {
+              if (stopSequenceRef.current) { clearTimeout(t); clearInterval(poll); reject(new Error('Stopped')); }
+            }, 50);
+            setTimeout(() => clearInterval(poll), (block.delayMs ?? 500) + 100);
+          });
+        } else if (block.type === 'waitfor') {
+          appendToTerminal(`[WAIT FOR "${block.matchStr}"...]\n`);
+          await waitForResponse(block.matchStr!, block.timeoutMs ?? 3000);
+          appendToTerminal(`[WAIT FOR matched]\n`);
+        }
+        setBlockStatuses(prev => ({ ...prev, [block.id]: 'done' }));
+      } catch (e: any) {
+        setBlockStatuses(prev => ({ ...prev, [block.id]: 'error' }));
+        appendToTerminal(`[Block error: ${e.message}]\n`);
+        break;
+      }
+    }
+
+    setIsRunningSequence(false);
+    stopSequenceRef.current = false;
+    appendToTerminal('[■ Sequence complete]\n\n');
   };
 
   // =====================================================
@@ -899,7 +1043,6 @@ void loop() {
     }
 
     const fileName = selectedFile.name.toLowerCase();
-    const isBinaryFile = fileName.endsWith('.bin') || fileName.endsWith('.hex') || fileName.endsWith('.elf');
     const isSourceFile = fileName.endsWith('.ino') || fileName.endsWith('.c') || fileName.endsWith('.cpp');
 
     // For source files, guide user to compile externally
@@ -1003,18 +1146,16 @@ void loop() {
 
       {/* Tabs */}
       <div style={styles.tabs}>
-        {(['flash', 'config', 'monitor', 'debug'] as const).map(tab => (
-          <button 
+        {(['flash', 'monitor'] as const).map(tab => (
+          <button
             key={tab}
-            style={{ 
-              ...styles.tab, 
-              ...(activeTab === tab ? styles.tabActive : {}) 
-            }} 
+            style={{
+              ...styles.tab,
+              ...(activeTab === tab ? styles.tabActive : {})
+            }}
             onClick={() => setActiveTab(tab)}
           >
-            {tab === 'flash' ? '⚡ Flash' : 
-             tab === 'config' ? '⚙️ Config' : 
-             tab === 'monitor' ? '📟 Monitor' : '🔍 Debug'}
+            {tab === 'flash' ? '⚡ Flash' : '📟 Monitor'}
           </button>
         ))}
       </div>
@@ -1022,145 +1163,223 @@ void loop() {
       <div style={styles.content}>
         {/* ==================== MONITOR TAB ==================== */}
         {activeTab === 'monitor' && (
-          <div style={{ display: 'flex', gap: '15px', height: 'calc(100vh - 180px)' }}>
-            
-            {/* Sidebar - Command Builder */}
-            <div style={styles.sidebar}>
-              <div style={styles.sidebarSection}>
-                <h3 style={styles.sidebarTitle}>Command Builder</h3>
-                
-                <select 
-                  style={styles.select}
-                  value={selectedCommand} 
-                  onChange={(e) => setSelectedCommand(e.target.value)}
-                >
-                  {Object.keys(COMMANDS).map(cmd => (
-                    <option key={cmd} value={cmd}>{cmd}</option>
-                  ))}
-                </select>
-                
-                <div style={styles.cmdDesc}>
-                  {COMMANDS[selectedCommand].description}
-                </div>
+          <div style={{ display: 'flex', height: 'calc(100vh - 180px)', overflow: 'hidden' }}>
 
-                {COMMANDS[selectedCommand].params.map((param, idx) => (
-                  <div key={idx} style={styles.inputGroup}>
-                    <label style={styles.inputLabel}>{param.label}</label>
-                    <input 
-                      type="text" 
-                      style={styles.input}
-                      value={commandParams[`param_${idx}`] || param.defaultValue}
-                      onChange={(e) => setCommandParams({ 
-                        ...commandParams, 
-                        [`param_${idx}`]: e.target.value 
-                      })} 
-                    />
+            {/* ---- Block Sequencer Panel ---- */}
+            <div style={styles.blockPanel}>
+              {/* Header */}
+              <div style={styles.blockPanelHeader}>
+                <span style={{ color: '#aaa', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Sequence</span>
+                <input
+                  style={styles.sequenceNameInput}
+                  value={sequenceName}
+                  onChange={e => setSequenceName(e.target.value)}
+                  disabled={isRunningSequence}
+                  title="Sequence name"
+                />
+              </div>
+
+              {/* Block List */}
+              <div style={styles.blockList}>
+                {blocks.length === 0 && (
+                  <div style={styles.blockEmpty}>
+                    <div style={{ fontSize: '24px', marginBottom: '8px', opacity: 0.3 }}>⬡</div>
+                    <div style={{ color: '#555', fontSize: '12px' }}>No blocks yet.</div>
+                    <div style={{ color: '#444', fontSize: '11px', marginTop: '4px' }}>Add a block below to start.</div>
                   </div>
-                ))}
+                )}
+                {blocks.map((block, idx) => {
+                  const status = blockStatuses[block.id] || 'idle';
+                  const borderColor = block.type === 'cmd' ? '#EB7923' : block.type === 'delay' ? '#16a34a' : '#7c3aed';
+                  const statusColor = status === 'running' ? '#f59e0b' : status === 'done' ? '#16a34a' : status === 'error' ? '#dc2626' : '#d1d5db';
+                  const statusLabel = status === 'running' ? '⏳' : status === 'done' ? '✓' : status === 'error' ? '✗' : '○';
+                  return (
+                    <div key={block.id} style={{ ...styles.blockCard, borderLeftColor: borderColor, opacity: isRunningSequence ? 0.85 : 1 }}>
+                      {/* Block type badge + status */}
+                      <div style={styles.blockCardTop}>
+                        <span style={{ ...styles.blockTypeBadge, backgroundColor: borderColor === '#EB7923' ? '#fff3e0' : borderColor === '#16a34a' ? '#dcfce7' : '#ede9fe', color: borderColor === '#EB7923' ? '#92400e' : borderColor === '#16a34a' ? '#14532d' : '#4c1d95' }}>
+                          {block.type === 'cmd' ? 'CMD' : block.type === 'delay' ? 'DELAY' : 'WAIT'}
+                        </span>
+                        <span style={{ color: statusColor, fontSize: '14px', lineHeight: 1 }}>{statusLabel}</span>
+                        {!isRunningSequence && (
+                          <div style={styles.blockControls}>
+                            <button style={styles.blockCtrlBtn} onClick={() => moveBlock(block.id, -1)} disabled={idx === 0} title="Move up">↑</button>
+                            <button style={styles.blockCtrlBtn} onClick={() => moveBlock(block.id, 1)} disabled={idx === blocks.length - 1} title="Move down">↓</button>
+                            <button style={{ ...styles.blockCtrlBtn, color: '#dc2626', borderColor: 'rgba(220,38,38,0.25)' }} onClick={() => removeBlock(block.id)} title="Remove">×</button>
+                          </div>
+                        )}
+                      </div>
 
-                <button 
-                  style={{ 
-                    ...styles.btnSend, 
-                    opacity: !isConnected ? 0.5 : 1 
-                  }} 
-                  onClick={sendBuilderCommand} 
-                  disabled={!isConnected}
-                >
-                  📤 Send Command
-                </button>
+                      {/* Block content */}
+                      {block.type === 'cmd' && (
+                        <div style={styles.blockBody}>
+                          <input
+                            style={styles.blockInput}
+                            value={block.command ?? ''}
+                            onChange={e => updateBlock(block.id, { command: e.target.value })}
+                            disabled={isRunningSequence}
+                            placeholder="command"
+                            list="cmd-suggestions"
+                          />
+                          <datalist id="cmd-suggestions">
+                            {Object.keys(COMMANDS).map(c => <option key={c} value={c} />)}
+                          </datalist>
+                          {COMMANDS[block.command ?? '']?.params.length > 0 && (
+                            <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+                              {COMMANDS[block.command!].params.map((p, i) => (
+                                <input
+                                  key={i}
+                                  style={{ ...styles.blockInput, flex: 1, minWidth: '50px' }}
+                                  value={(block.params ?? [])[i] ?? p.defaultValue}
+                                  onChange={e => {
+                                    const updated = [...(block.params ?? COMMANDS[block.command!].params.map(pp => pp.defaultValue))];
+                                    updated[i] = e.target.value;
+                                    updateBlock(block.id, { params: updated });
+                                  }}
+                                  disabled={isRunningSequence}
+                                  placeholder={p.label}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {block.type === 'delay' && (
+                        <div style={styles.blockBody}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <input
+                              style={{ ...styles.blockInput, width: '70px' }}
+                              type="number"
+                              value={block.delayMs ?? 500}
+                              onChange={e => updateBlock(block.id, { delayMs: parseInt(e.target.value) || 0 })}
+                              disabled={isRunningSequence}
+                              min="0"
+                            />
+                            <span style={{ color: '#888', fontSize: '11px' }}>ms</span>
+                          </div>
+                        </div>
+                      )}
+                      {block.type === 'waitfor' && (
+                        <div style={styles.blockBody}>
+                          <input
+                            style={styles.blockInput}
+                            value={block.matchStr ?? ''}
+                            onChange={e => updateBlock(block.id, { matchStr: e.target.value })}
+                            disabled={isRunningSequence}
+                            placeholder="match string"
+                          />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                            <input
+                              style={{ ...styles.blockInput, width: '60px' }}
+                              type="number"
+                              value={block.timeoutMs ?? 3000}
+                              onChange={e => updateBlock(block.id, { timeoutMs: parseInt(e.target.value) || 0 })}
+                              disabled={isRunningSequence}
+                              min="100"
+                            />
+                            <span style={{ color: '#888', fontSize: '11px' }}>ms timeout</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
-              <div style={styles.divider} />
-
-              {/* Quick Commands */}
-              <div style={styles.sidebarSection}>
-                <h3 style={styles.sidebarTitle}>Quick Commands</h3>
-                <div style={styles.quickGrid}>
-                  <QuickButton cmd="hello" />
-                  <QuickButton cmd="toggle-led" />
-                  <QuickButton cmd="blink" />
-                  <QuickButton cmd="get_pid" />
-                  <QuickButton cmd="status" />
-                  <QuickButton cmd="help" />
-                </div>
-              </div>
-
-              <div style={styles.divider} />
-
-              {/* Settings */}
-              <div style={styles.sidebarSection}>
-                <h3 style={styles.sidebarTitle}>Settings</h3>
-                
-                <div style={styles.inputGroup}>
-                  <label style={styles.inputLabel}>Char Delay (ms)</label>
-                  <input 
-                    type="number" 
-                    style={styles.input}
-                    value={charDelay} 
-                    onChange={(e) => setCharDelay(parseInt(e.target.value) || 0)} 
-                    min="0" 
-                    max="100" 
-                  />
-                </div>
-
-                <div style={styles.inputGroup}>
-                  <label style={styles.inputLabel}>Line Ending</label>
-                  <select 
-                    style={styles.select}
-                    value={lineEnding} 
-                    onChange={(e) => setLineEnding(e.target.value)}
+              {/* Add Block Menu */}
+              <div style={styles.blockAddArea}>
+                {showAddMenu ? (
+                  <div style={styles.addMenuPopup}>
+                    <button style={styles.addMenuOption} onClick={() => addBlock('cmd')}>
+                      <span style={{ color: '#92400e', fontWeight: '700' }}>CMD</span>
+                      <span style={{ color: '#888', fontSize: '11px' }}>Send a command</span>
+                    </button>
+                    <button style={styles.addMenuOption} onClick={() => addBlock('delay')}>
+                      <span style={{ color: '#14532d', fontWeight: '700' }}>DELAY</span>
+                      <span style={{ color: '#888', fontSize: '11px' }}>Wait N ms</span>
+                    </button>
+                    <button style={styles.addMenuOption} onClick={() => addBlock('waitfor')}>
+                      <span style={{ color: '#4c1d95', fontWeight: '700' }}>WAIT FOR</span>
+                      <span style={{ color: '#888', fontSize: '11px' }}>Match response</span>
+                    </button>
+                    <button style={{ ...styles.addMenuOption, color: '#666', fontSize: '11px', justifyContent: 'center' }} onClick={() => setShowAddMenu(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    style={styles.btnAddBlock}
+                    onClick={() => setShowAddMenu(true)}
+                    disabled={isRunningSequence}
                   >
-                    <option value="\r">\r (CR)</option>
-                    <option value="\n">\n (LF)</option>
-                    <option value="\r\n">\r\n (CRLF)</option>
+                    + Add Block
+                  </button>
+                )}
+              </div>
+
+              {/* Run / Stop */}
+              <div style={styles.blockRunArea}>
+                {isRunningSequence ? (
+                  <button
+                    style={styles.btnStop}
+                    onClick={() => { stopSequenceRef.current = true; }}
+                  >
+                    ■ Stop
+                  </button>
+                ) : (
+                  <button
+                    style={{ ...styles.btnRun, opacity: (blocks.length === 0 || !isConnected) ? 0.45 : 1 }}
+                    onClick={runSequence}
+                    disabled={blocks.length === 0 || !isConnected}
+                    title={!isConnected ? 'Connect to device first' : blocks.length === 0 ? 'Add blocks first' : 'Run sequence'}
+                  >
+                    ▶ Run Sequence
+                  </button>
+                )}
+                <div style={styles.blockStats}>TX: {txBytes} | RX: {rxBytes}</div>
+              </div>
+
+              {/* Settings (collapsed at bottom) */}
+              <div style={styles.blockSettings}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>Baud</label>
+                  <select style={styles.settingsSelect} value={config.baudRate} onChange={e => setConfig({ ...config, baudRate: parseInt(e.target.value) })} disabled={isConnected}>
+                    <option value="115200">115200</option>
+                    <option value="57600">57600</option>
+                    <option value="9600">9600</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>Delay</label>
+                  <input style={{ ...styles.settingsSelect, width: '44px' }} type="number" value={charDelay} onChange={e => setCharDelay(parseInt(e.target.value) || 0)} min="0" max="100" />
+                  <span style={{ color: '#555', fontSize: '10px' }}>ms</span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>EOL</label>
+                  <select style={styles.settingsSelect} value={lineEnding} onChange={e => setLineEnding(e.target.value)}>
+                    <option value="\r">CR</option>
+                    <option value="\n">LF</option>
+                    <option value="\r\n">CRLF</option>
                   </select>
                 </div>
               </div>
-
-              {/* Stats */}
-              <div style={styles.stats}>
-                TX: {txBytes} | RX: {rxBytes}
-              </div>
             </div>
 
-            {/* Terminal Area */}
+            {/* ---- Terminal Area ---- */}
             <div style={styles.terminalArea}>
               {/* Control Bar */}
               <div style={styles.controlBar}>
-                <button 
-                  style={{ 
-                    ...styles.btnConnect, 
-                    backgroundColor: isConnected ? '#c62828' : '#2e7d32' 
-                  }} 
+                <button
+                  style={{ ...styles.btnConnect, backgroundColor: isConnected ? '#c62828' : '#2e7d32' }}
                   onClick={connect}
                 >
                   {isConnected ? '❌ Disconnect' : '🔌 Connect'}
                 </button>
-                
-                <select 
-                  style={styles.baudSelect}
-                  value={config.baudRate} 
-                  onChange={(e) => setConfig({ ...config, baudRate: parseInt(e.target.value) })} 
-                  disabled={isConnected}
-                >
-                  <option value="115200">115200 baud</option>
-                  <option value="9600">9600 baud</option>
-                  <option value="57600">57600 baud</option>
-                </select>
-
-                <button 
-                  style={styles.btnSmall} 
-                  onClick={() => setTermOutput('')}
-                >
+                <button style={styles.btnSmall} onClick={() => { setTermOutput(''); termOutputRef.current = ''; }}>
                   🗑️ Clear
                 </button>
-
                 <div style={styles.connectionStatus}>
-                  <span style={{ 
-                    color: isConnected ? '#4caf50' : '#888',
-                    fontSize: '20px',
-                    lineHeight: '1'
-                  }}>●</span>
+                  <span style={{ color: isConnected ? '#4caf50' : '#888', fontSize: '20px', lineHeight: '1' }}>●</span>
                   <span style={{ color: isConnected ? '#4caf50' : '#888' }}>
                     {isConnected ? 'Connected' : 'Disconnected'}
                   </span>
@@ -1169,28 +1388,21 @@ void loop() {
 
               {/* Terminal Output */}
               <div ref={terminalRef} style={styles.terminal}>
-                {termOutput || `MakeyDooey Terminal Ready
-
-1. Click "🔌 Connect" and select your ESP32/Nucleo
-2. Type "hello" to test the connection
-3. Use Quick Commands or Command Builder
-
-Tip: If port is busy, close Arduino Serial Monitor first.
-`}
+                {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Build a sequence with blocks on the left, then click "▶ Run"\n3. Or type commands manually below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
               </div>
 
               {/* Manual Input */}
               <div style={styles.inputRow}>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   style={styles.manualInput}
                   placeholder={isConnected ? "Type command and press Enter..." : "Connect first..."}
                   value={commandInput}
-                  onChange={(e) => setCommandInput(e.target.value)}
+                  onChange={e => setCommandInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   disabled={!isConnected}
                 />
-                <button 
+                <button
                   style={styles.btnInputSend}
                   onClick={() => sendCommand(commandInput)}
                   disabled={!isConnected}
@@ -1223,7 +1435,7 @@ Tip: If port is busy, close Arduino Serial Monitor first.
                   style={{
                     ...styles.dropZone,
                     borderColor: isDragOver ? '#2196F3' : '#444',
-                    backgroundColor: isDragOver ? 'rgba(33, 150, 243, 0.1)' : '#0a0a0a'
+                    backgroundColor: isDragOver ? tok.blueFaint : tok.orangeFaint
                   }}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -1366,7 +1578,7 @@ Tip: If port is busy, close Arduino Serial Monitor first.
                     ...styles.btnSecondary,
                     width: '100%',
                     marginTop: '10px',
-                    backgroundColor: isConnected ? '#1a3a1a' : '#1a1a1a',
+                    backgroundColor: isConnected ? tok.greenFaint : tok.panelBg,
                     borderColor: isConnected ? '#4CAF50' : '#444'
                   }}
                   onClick={() => setActiveTab('monitor')}
@@ -1519,748 +1731,434 @@ Tip: If port is busy, close Arduino Serial Monitor first.
           </div>
         )}
 
-        {/* ==================== CONFIG TAB ==================== */}
-        {activeTab === 'config' && (
-          <div style={styles.section}>
-            <h4 style={styles.sectionTitle}>⚙️ Serial Configuration</h4>
-            <div style={styles.configGrid}>
-              <div style={styles.configItem}>
-                <label style={styles.configLabel}>Baud Rate</label>
-                <select 
-                  style={styles.selectInput} 
-                  value={config.baudRate} 
-                  onChange={(e) => setConfig({ ...config, baudRate: parseInt(e.target.value) })}
-                >
-                  <option value="9600">9600</option>
-                  <option value="57600">57600</option>
-                  <option value="115200">115200</option>
-                </select>
-              </div>
-              
-              <div style={styles.configItem}>
-                <label style={styles.configLabel}>Character Delay</label>
-                <input 
-                  type="number" 
-                  style={styles.selectInput}
-                  value={charDelay}
-                  onChange={(e) => setCharDelay(parseInt(e.target.value) || 0)}
-                  min="0"
-                  max="100"
-                />
-              </div>
-              
-              <div style={styles.configItem}>
-                <label style={styles.configLabel}>Line Ending</label>
-                <select 
-                  style={styles.selectInput} 
-                  value={lineEnding} 
-                  onChange={(e) => setLineEnding(e.target.value)}
-                >
-                  <option value="\r">\r (CR)</option>
-                  <option value="\n">\n (LF)</option>
-                  <option value="\r\n">\r\n (CRLF)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ==================== DEBUG TAB ==================== */}
-        {activeTab === 'debug' && (
-          <>
-            <div style={styles.section}>
-              <h4 style={styles.sectionTitle}>🔍 Device Info</h4>
-              <div style={styles.statusGrid}>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Device ID</div>
-                  <div style={styles.statusFieldValue}>{totem.id}</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Board Type</div>
-                  <div style={{ ...styles.statusFieldValue, color: boardInfo.color }}>
-                    {boardInfo.icon} {boardInfo.label}
-                  </div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Device Name</div>
-                  <div style={styles.statusFieldValue}>{totem.name}</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Serial / VID:PID</div>
-                  <div style={styles.statusFieldValue}>{totem.serialNumber}</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Connection</div>
-                  <div style={{ 
-                    ...styles.statusFieldValue, 
-                    color: isConnected ? '#4CAF50' : '#F44336' 
-                  }}>
-                    {isConnected ? '● Connected' : '○ Disconnected'}
-                  </div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Baud Rate</div>
-                  <div style={styles.statusFieldValue}>{config.baudRate}</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>TX Bytes</div>
-                  <div style={styles.statusFieldValue}>{txBytes}</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>RX Bytes</div>
-                  <div style={styles.statusFieldValue}>{rxBytes}</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Char Delay</div>
-                  <div style={styles.statusFieldValue}>{charDelay}ms</div>
-                </div>
-                <div style={styles.statusField}>
-                  <div style={styles.statusFieldLabel}>Web Serial</div>
-                  <div style={styles.statusFieldValue}>
-                    {'serial' in navigator ? '✓ Available' : '✗ Not Available'}
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div style={styles.section}>
-              <h4 style={styles.sectionTitle}>📋 Known Device IDs</h4>
-              <div style={{ 
-                backgroundColor: '#0a0a0a', 
-                padding: '15px', 
-                borderRadius: '4px',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-                color: '#888',
-                maxHeight: '150px',
-                overflowY: 'auto'
-              }}>
-                <div style={{ color: '#00C853', marginBottom: '8px' }}>ESP32:</div>
-                <div>• 303a:* (Espressif native USB)</div>
-                <div>• 10c4:ea60 (CP2102 - Silicon Labs)</div>
-                <div>• 1a86:7523 (CH340 - WCH)</div>
-                <div>• 1a86:55d4 (CH9102 - WCH)</div>
-                <br />
-                <div style={{ color: '#2196F3', marginBottom: '8px' }}>Nucleo/STM32:</div>
-                <div>• 0483:374b (Nucleo-144)</div>
-                <div>• 0483:5740 (STM32 VCP)</div>
-                <div>• 0483:3748 (ST-Link V2)</div>
-              </div>
-            </div>
-            
-            <div style={styles.section}>
-              <h4 style={styles.sectionTitle}>🛠️ Troubleshooting</h4>
-              <div style={{ 
-                backgroundColor: '#0a0a0a', 
-                padding: '15px', 
-                borderRadius: '4px',
-                fontFamily: 'monospace',
-                fontSize: '12px',
-                color: '#0f0'
-              }}>
-                <div style={{ marginBottom: '10px', color: '#888' }}># Check USB devices</div>
-                <div>ls /dev/tty.usb* /dev/cu.usb*</div>
-                <br />
-                <div style={{ marginBottom: '10px', color: '#888' }}># See what's using the port</div>
-                <div>lsof | grep usbmodem</div>
-                <br />
-                <div style={{ marginBottom: '10px', color: '#888' }}># Kill Chrome if port is stuck</div>
-                <div>killall "Google Chrome"</div>
-                <br />
-                <div style={{ marginBottom: '10px', color: '#888' }}># Get USB device info (macOS)</div>
-                <div>system_profiler SPUSBDataType | grep -A 10 "ESP\|STM\|CH340\|CP210"</div>
-              </div>
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
 };
 
 // =====================================================
-// STYLES
+// =====================================================
+// STYLES — warm MakeyDooey theme
 // =====================================================
 
-const styles: { [key: string]: React.CSSProperties } = {
-  container: { 
-    position: 'fixed', 
-    top: 0, 
-    left: 0, 
-    right: 0, 
-    bottom: 0, 
-    backgroundColor: '#0a0a0a', 
-    zIndex: 1000, 
-    display: 'flex', 
-    flexDirection: 'column',
-    fontFamily: "'Monaco', 'Consolas', monospace"
+const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSProperties } => ({
+  container: {
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: tok.pageBg, zIndex: 1000,
+    display: 'flex', flexDirection: 'column',
+    fontFamily: "'Nunito', 'Helvetica Neue', sans-serif",
   },
-  header: { 
-    background: 'linear-gradient(180deg, #1a1a1a 0%, #111 100%)',
-    borderBottom: '2px solid #333', 
-    padding: '12px 20px' 
+  header: {
+    background: tok.cardBg,
+    backdropFilter: 'blur(10px)',
+    borderBottom: '1.5px solid rgba(235,121,35,0.18)',
+    padding: '12px 20px',
+    boxShadow: tok.shadow,
   },
-  headerContent: { 
-    display: 'flex', 
-    justifyContent: 'space-between', 
-    alignItems: 'center' 
+  headerContent: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  title: { margin: 0, color: tok.textPrimary, fontSize: '16px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
+  closeButton: {
+    backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`,
+    borderRadius: '8px', color: tok.orangeText, fontSize: '20px',
+    cursor: 'pointer', padding: '2px 10px', lineHeight: '1',
   },
-  title: { 
-    margin: 0, 
-    color: '#fff', 
-    fontSize: '16px', 
-    fontWeight: '600' 
+  tabs: {
+    display: 'flex', backgroundColor: tok.panelHeaderBg,
+    borderBottom: `1.5px solid ${tok.border}`, paddingLeft: '20px',
   },
-  closeButton: { 
-    backgroundColor: 'transparent', 
-    border: 'none', 
-    color: '#666', 
-    fontSize: '28px', 
-    cursor: 'pointer', 
-    padding: '0 10px',
-    lineHeight: '1'
+  tab: {
+    backgroundColor: 'transparent', border: 'none', color: tok.textMuted,
+    padding: '11px 20px', cursor: 'pointer', fontSize: '13px',
+    fontWeight: '700', fontFamily: "'Nunito', sans-serif",
+    borderBottom: '2px solid transparent', transition: 'color 0.15s',
   },
-  tabs: { 
-    display: 'flex', 
-    backgroundColor: '#111', 
-    borderBottom: '1px solid #333', 
-    paddingLeft: '20px' 
-  },
-  tab: { 
-    backgroundColor: 'transparent', 
-    border: 'none', 
-    color: '#666', 
-    padding: '12px 20px', 
-    cursor: 'pointer', 
-    fontSize: '13px', 
-    fontWeight: '500', 
-    borderBottom: '2px solid transparent',
-    transition: 'all 0.2s'
-  },
-  tabActive: { 
-    color: '#fff', 
-    borderBottomColor: '#2196f3' 
-  },
-  content: { 
-    flex: 1, 
-    overflow: 'auto', 
-    padding: '15px' 
-  },
-  
-  // Sidebar
+  tabActive: { color: tok.orange, borderBottomColor: '#EB7923' },
+  content: { flex: 1, overflow: 'auto', padding: '15px', background: '#fdf6ee' },
+
+  // Sidebar (legacy - kept for compat)
   sidebar: {
-    width: '260px',
-    backgroundColor: '#141414',
-    borderRadius: '8px',
-    padding: '15px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-    overflowY: 'auto',
-    border: '1px solid #333'
+    width: '260px', backgroundColor: tok.panelBg,
+    borderRadius: '12px', padding: '15px',
+    display: 'flex', flexDirection: 'column', gap: '10px',
+    overflowY: 'auto', border: `1.5px solid ${tok.border}`,
   },
-  sidebarSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px'
-  },
-  sidebarTitle: {
-    margin: 0,
-    fontSize: '11px',
-    color: '#666',
-    textTransform: 'uppercase',
-    letterSpacing: '1px'
-  },
-  divider: {
-    borderTop: '1px solid #333',
-    margin: '5px 0'
-  },
+  sidebarSection: { display: 'flex', flexDirection: 'column', gap: '10px' },
+  sidebarTitle: { margin: 0, fontSize: '11px', color: tok.textMuted, textTransform: 'uppercase', letterSpacing: '1px' },
+  divider: { borderTop: `1.5px solid ${tok.borderSubtle}`, margin: '5px 0' },
   select: {
-    width: '100%',
-    padding: '8px 10px',
-    backgroundColor: '#1a1a1a',
-    border: '1px solid #333',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '13px',
-    cursor: 'pointer'
+    width: '100%', padding: '8px 10px', backgroundColor: tok.inputBg,
+    border: `1.5px solid ${tok.border}`, borderRadius: '8px',
+    color: tok.textPrimary, fontSize: '13px', cursor: 'pointer',
   },
-  inputGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px'
-  },
-  inputLabel: {
-    color: '#666',
-    fontSize: '11px',
-    textTransform: 'uppercase'
-  },
+  inputGroup: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  inputLabel: { color: tok.textMuted, fontSize: '11px', textTransform: 'uppercase' },
   input: {
-    width: '100%',
-    padding: '8px 10px',
-    backgroundColor: '#0a0a0a',
-    border: '1px solid #333',
-    borderRadius: '4px',
-    color: '#0f0',
-    fontSize: '13px',
-    fontFamily: 'inherit',
-    boxSizing: 'border-box'
+    width: '100%', padding: '8px 10px', backgroundColor: tok.inputBg,
+    border: `1.5px solid ${tok.border}`, borderRadius: '8px',
+    color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Consolas', monospace",
+    boxSizing: 'border-box',
   },
   cmdDesc: {
-    fontSize: '11px',
-    color: '#666',
-    padding: '8px',
-    backgroundColor: '#0a0a0a',
-    borderRadius: '4px'
+    fontSize: '11px', color: tok.textMuted, padding: '8px',
+    backgroundColor: tok.orangeFaint, borderRadius: '8px',
+    border: `1px solid ${tok.borderSubtle}`,
   },
   btnSend: {
-    width: '100%',
-    padding: '10px',
-    backgroundColor: '#1565c0',
-    border: 'none',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '13px',
-    fontWeight: '500',
-    cursor: 'pointer'
+    width: '100%', padding: '10px', backgroundColor: tok.orange,
+    border: 'none', borderRadius: '8px', color: tok.textOnOrange,
+    fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+    fontFamily: "'Nunito', sans-serif",
+    boxShadow: `0 2px 8px ${tok.orangeSubtle}`,
   },
-  quickGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: '6px'
-  },
+  quickGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' },
   quickBtn: {
-    padding: '6px 8px',
-    backgroundColor: '#1a1a1a',
-    border: '1px solid #333',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '11px',
-    cursor: 'pointer'
+    padding: '6px 8px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`,
+    borderRadius: '6px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer',
+    fontWeight: '700', fontFamily: "'Nunito', sans-serif",
   },
   stats: {
-    fontSize: '11px',
-    color: '#666',
-    textAlign: 'center',
-    padding: '8px',
-    backgroundColor: '#0a0a0a',
-    borderRadius: '4px',
-    marginTop: 'auto'
+    fontSize: '11px', color: tok.textMuted, textAlign: 'center', padding: '8px',
+    backgroundColor: tok.orangeFaint, borderRadius: '8px', marginTop: 'auto',
   },
-  
+
   // Terminal area
   terminalArea: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    backgroundColor: '#000',
-    borderRadius: '8px',
-    overflow: 'hidden',
-    border: '1px solid #333'
+    flex: 1, display: 'flex', flexDirection: 'column',
+    backgroundColor: tok.termBg, borderRadius: '14px',
+    overflow: 'hidden', border: `1.5px solid ${tok.borderStrong}`,
+    boxShadow: tok.shadow,
   },
   controlBar: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'center',
-    backgroundColor: '#1a1a1a',
-    padding: '10px 15px',
-    borderBottom: '1px solid #333'
+    display: 'flex', gap: '10px', alignItems: 'center',
+    backgroundColor: tok.termHeaderBg, padding: '10px 15px',
+    borderBottom: `1px solid ${tok.border}`,
   },
   btnConnect: {
-    padding: '8px 16px',
-    border: 'none',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '13px',
-    fontWeight: '500',
-    cursor: 'pointer'
+    padding: '8px 16px', border: 'none', borderRadius: '8px',
+    color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+    fontFamily: "'Nunito', sans-serif",
   },
   baudSelect: {
-    padding: '8px 12px',
-    backgroundColor: '#222',
-    border: '1px solid #444',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '13px'
+    padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.08)',
+    border: '1px solid rgba(235,121,35,0.2)', borderRadius: '6px',
+    color: tok.textPrimary, fontSize: '13px',
   },
   btnSmall: {
-    padding: '8px 12px',
-    backgroundColor: '#222',
-    border: '1px solid #444',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '12px',
-    cursor: 'pointer'
+    padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.07)',
+    border: '1px solid rgba(235,121,35,0.2)', borderRadius: '6px',
+    color: tok.textPrimary, fontSize: '12px', cursor: 'pointer',
   },
-  connectionStatus: {
-    marginLeft: 'auto',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    fontSize: '13px'
-  },
+  connectionStatus: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
   terminal: {
-    flex: 1,
-    padding: '15px',
-    whiteSpace: 'pre-wrap',
-    overflowY: 'auto',
-    fontSize: '13px',
-    color: '#0f0',
-    fontFamily: "'Monaco', 'Consolas', monospace",
-    lineHeight: '1.5'
+    flex: 1, padding: '15px', whiteSpace: 'pre-wrap', overflowY: 'auto',
+    fontSize: '13px', color: tok.termText,
+    fontFamily: "'DM Mono', 'Monaco', 'Consolas', monospace", lineHeight: '1.5',
+    background: 'transparent',
   },
-  inputRow: {
-    display: 'flex',
-    borderTop: '1px solid #333'
-  },
+  inputRow: { display: 'flex', borderTop: '1px solid rgba(235,121,35,0.15)' },
   manualInput: {
-    flex: 1,
-    padding: '12px 15px',
-    backgroundColor: '#111',
-    border: 'none',
-    color: '#0f0',
-    fontSize: '14px',
-    fontFamily: 'inherit',
-    outline: 'none'
+    flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg,
+    border: 'none', color: tok.termText, fontSize: '14px',
+    fontFamily: "'DM Mono', 'Monaco', monospace", outline: 'none',
   },
   btnInputSend: {
-    padding: '12px 20px',
-    backgroundColor: '#1565c0',
-    border: 'none',
-    borderLeft: '1px solid #333',
-    color: '#fff',
-    fontSize: '13px',
-    cursor: 'pointer'
-  },
-  
-  // Sections
-  section: { 
-    backgroundColor: '#141414', 
-    borderRadius: '8px', 
-    padding: '20px', 
-    marginBottom: '15px', 
-    border: '1px solid #333' 
-  },
-  sectionTitle: { 
-    margin: '0 0 15px 0', 
-    color: '#fff', 
-    fontSize: '14px', 
-    fontWeight: '600' 
-  },
-  
-  // Buttons
-  btnPrimary: { 
-    backgroundColor: '#1565c0', 
-    color: 'white', 
-    border: 'none', 
-    padding: '10px 20px', 
-    borderRadius: '4px', 
-    fontSize: '13px', 
-    fontWeight: '500', 
-    cursor: 'pointer'
-  },
-  btnSuccess: { 
-    backgroundColor: '#2e7d32', 
-    color: 'white', 
-    border: 'none', 
-    padding: '10px 20px', 
-    borderRadius: '4px', 
-    fontSize: '13px', 
-    fontWeight: '500', 
-    cursor: 'pointer'
-  },
-  
-  // Progress
-  progressBar: { 
-    position: 'relative', 
-    width: '100%', 
-    height: '24px', 
-    backgroundColor: '#1a1a1a', 
-    borderRadius: '4px', 
-    overflow: 'hidden', 
-    marginTop: '12px',
-    border: '1px solid #333'
-  },
-  progressFill: { 
-    height: '100%', 
-    backgroundColor: '#2e7d32', 
-    transition: 'width 0.3s'
-  },
-  progressText: { 
-    position: 'absolute', 
-    top: '50%', 
-    left: '50%', 
-    transform: 'translate(-50%, -50%)', 
-    color: '#fff', 
-    fontSize: '11px', 
-    fontWeight: 'bold' 
-  },
-  
-  // Log
-  logOutput: { 
-    backgroundColor: '#0a0a0a', 
-    border: '1px solid #333', 
-    borderRadius: '4px', 
-    padding: '12px', 
-    maxHeight: '200px', 
-    overflowY: 'auto', 
-    fontFamily: 'monospace', 
-    fontSize: '12px'
-  },
-  logLine: { 
-    color: '#0f0', 
-    marginBottom: '4px' 
-  },
-  
-  // Config
-  configGrid: { 
-    display: 'grid', 
-    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
-    gap: '15px' 
-  },
-  configItem: { 
-    display: 'flex', 
-    flexDirection: 'column', 
-    gap: '6px' 
-  },
-  configLabel: { 
-    fontSize: '12px', 
-    color: '#888', 
-    fontWeight: '500' 
-  },
-  selectInput: { 
-    backgroundColor: '#1a1a1a', 
-    border: '1px solid #444', 
-    borderRadius: '4px', 
-    padding: '8px 12px', 
-    color: '#fff', 
-    fontSize: '13px'
-  },
-  
-  // Status grid
-  statusGrid: { 
-    display: 'grid', 
-    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
-    gap: '10px' 
-  },
-  statusField: { 
-    backgroundColor: '#0a0a0a', 
-    padding: '12px', 
-    borderRadius: '4px', 
-    border: '1px solid #333' 
-  },
-  statusFieldLabel: { 
-    fontSize: '10px', 
-    color: '#666', 
-    marginBottom: '4px',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px'
-  },
-  statusFieldValue: {
-    fontSize: '14px',
-    fontWeight: '600',
-    color: '#fff',
-    fontFamily: 'monospace'
+    padding: '12px 20px', backgroundColor: tok.orange,
+    border: 'none', borderLeft: '1px solid rgba(235,121,35,0.2)',
+    color: tok.textOnOrange, fontSize: '13px', cursor: 'pointer',
+    fontWeight: '700', fontFamily: "'Nunito', sans-serif",
   },
 
-  // Flash Tab - Sidebar
-  flashSidebar: {
-    width: '300px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '15px',
-    overflowY: 'auto'
+  // Sections
+  section: {
+    backgroundColor: tok.cardBg, borderRadius: '12px',
+    padding: '20px', marginBottom: '15px',
+    border: `1.5px solid ${tok.border}`,
+    boxShadow: tok.shadow,
   },
+  sectionTitle: { margin: '0 0 15px 0', color: tok.textPrimary, fontSize: '14px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
+
+  // Buttons
+  btnPrimary: {
+    backgroundColor: tok.orange, color: 'white', border: 'none',
+    padding: '10px 20px', borderRadius: '8px', fontSize: '13px',
+    fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif",
+    boxShadow: '0 2px 8px rgba(235,121,35,0.28)',
+  },
+  btnSuccess: {
+    backgroundColor: tok.green, color: 'white', border: 'none',
+    padding: '10px 20px', borderRadius: '8px', fontSize: '13px',
+    fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif",
+  },
+  progressBar: {
+    position: 'relative', width: '100%', height: '24px',
+    backgroundColor: tok.orangeFaint, borderRadius: '8px', overflow: 'hidden',
+    marginTop: '12px', border: `1.5px solid ${tok.border}`,
+  },
+  progressFill: { height: '100%', backgroundColor: tok.orange, transition: 'width 0.3s' },
+  progressText: {
+    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+    color: tok.textPrimary, fontSize: '11px', fontWeight: '700',
+  },
+  logOutput: {
+    backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`,
+    borderRadius: '8px', padding: '12px', maxHeight: '200px', overflowY: 'auto',
+    fontFamily: "'DM Mono', monospace", fontSize: '12px',
+  },
+  logLine: { color: tok.orangeText, marginBottom: '4px' },
+  configGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' },
+  configItem: { display: 'flex', flexDirection: 'column', gap: '6px' },
+  configLabel: { fontSize: '12px', color: tok.textMuted, fontWeight: '500' },
+  selectInput: {
+    backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`,
+    borderRadius: '8px', padding: '8px 12px', color: tok.textPrimary, fontSize: '13px',
+  },
+  statusGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' },
+  statusField: {
+    backgroundColor: tok.orangeFaint, padding: '12px', borderRadius: '8px',
+    border: `1.5px solid ${tok.borderSubtle}`,
+  },
+  statusFieldLabel: {
+    fontSize: '10px', color: tok.textMuted, marginBottom: '4px',
+    textTransform: 'uppercase', letterSpacing: '0.5px',
+  },
+  statusFieldValue: { fontSize: '14px', fontWeight: '700', color: tok.textPrimary, fontFamily: "'DM Mono', monospace" },
+
+  // Flash Tab
+  flashSidebar: { width: '300px', display: 'flex', flexDirection: 'column', gap: '15px', overflowY: 'auto' },
   flashSection: {
-    backgroundColor: '#141414',
-    borderRadius: '8px',
-    padding: '15px',
-    border: '1px solid #333'
+    backgroundColor: tok.cardBg, borderRadius: '14px',
+    padding: '15px', border: `1.5px solid ${tok.border}`,
+    boxShadow: tok.shadow,
   },
   flashSectionTitle: {
-    margin: '0 0 12px 0',
-    color: '#fff',
-    fontSize: '13px',
-    fontWeight: '600'
+    margin: '0 0 12px 0', color: tok.textPrimary, fontSize: '13px',
+    fontWeight: '800', fontFamily: "'Nunito', sans-serif",
   },
-
-  // Drop Zone
   dropZone: {
-    border: '2px dashed #444',
-    borderRadius: '8px',
-    padding: '25px',
-    textAlign: 'center',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    marginBottom: '12px'
+    border: '2px dashed rgba(235,121,35,0.35)', borderRadius: '10px',
+    padding: '25px', textAlign: 'center', cursor: 'pointer',
+    transition: 'all 0.2s', marginBottom: '12px', backgroundColor: tok.orangeFaint,
   },
-
-  // Selected File Info
   selectedFileInfo: {
-    backgroundColor: '#0a0a0a',
-    border: '1px solid #333',
-    borderRadius: '6px',
-    padding: '10px 12px',
-    marginBottom: '12px'
+    backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`,
+    borderRadius: '8px', padding: '10px 12px', marginBottom: '12px',
   },
-
-  // File Actions
-  fileActions: {
-    display: 'flex',
-    gap: '8px',
-    flexWrap: 'wrap'
-  },
+  fileActions: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
   btnSecondary: {
-    flex: 1,
-    minWidth: '60px',
-    padding: '8px 12px',
-    backgroundColor: '#1a1a1a',
-    border: '1px solid #444',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '11px',
-    cursor: 'pointer',
-    transition: 'all 0.2s'
+    flex: 1, minWidth: '60px', padding: '8px 12px',
+    backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`,
+    borderRadius: '8px', color: tok.orangeText, fontSize: '11px',
+    cursor: 'pointer', transition: 'all 0.2s', fontWeight: '700',
+    fontFamily: "'Nunito', sans-serif",
   },
   btnFlash: {
-    width: '100%',
-    padding: '12px 20px',
-    backgroundColor: '#2e7d32',
-    border: 'none',
-    borderRadius: '6px',
-    color: '#fff',
-    fontSize: '14px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: 'all 0.2s'
+    width: '100%', padding: '12px 20px', backgroundColor: tok.orange,
+    border: 'none', borderRadius: '10px', color: tok.textOnOrange, fontSize: '14px',
+    fontWeight: '800', cursor: 'pointer', transition: 'all 0.2s',
+    fontFamily: "'Nunito', sans-serif",
+    boxShadow: `0 3px 12px ${tok.orangeSubtle}`,
   },
   flashLogOutput: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-    border: '1px solid #333',
-    borderRadius: '4px',
-    padding: '10px',
-    overflowY: 'auto',
-    fontFamily: 'monospace',
-    fontSize: '11px',
-    minHeight: '100px'
+    flex: 1, backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`,
+    borderRadius: '8px', padding: '10px', overflowY: 'auto',
+    fontFamily: "'DM Mono', monospace", fontSize: '11px', minHeight: '100px',
+    color: tok.orangeText,
   },
 
-  // Editor Panel
+  // Editor panel
   editorPanel: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    backgroundColor: '#0d0d0d',
-    borderRadius: '8px',
-    border: '1px solid #333',
-    overflow: 'hidden'
+    flex: 1, display: 'flex', flexDirection: 'column',
+    backgroundColor: tok.cardBgAlt, borderRadius: '14px',
+    border: `1.5px solid ${tok.border}`, overflow: 'hidden',
   },
   editorHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#1a1a1a',
-    borderBottom: '1px solid #333',
-    padding: '10px 15px'
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: tok.cardBg, borderBottom: `1.5px solid ${tok.borderSubtle}`,
+    padding: '10px 15px',
   },
-  editorFileInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px'
-  },
-  editorFileName: {
-    color: '#fff',
-    fontSize: '13px',
-    fontWeight: '500'
-  },
+  editorFileInfo: { display: 'flex', alignItems: 'center', gap: '10px' },
+  editorFileName: { color: tok.textPrimary, fontSize: '13px', fontWeight: '700' },
   editorMode: {
-    backgroundColor: '#333',
-    padding: '3px 8px',
-    borderRadius: '4px',
-    fontSize: '10px',
-    color: '#888'
+    backgroundColor: tok.orangeFaint, padding: '3px 8px', borderRadius: '6px',
+    fontSize: '10px', color: tok.orangeText, fontWeight: '700',
+    border: '1px solid rgba(235,121,35,0.2)',
   },
-  editorActions: {
-    display: 'flex',
-    gap: '8px'
-  },
+  editorActions: { display: 'flex', gap: '8px' },
   btnEditorAction: {
-    padding: '6px 12px',
-    backgroundColor: '#333',
-    border: 'none',
-    borderRadius: '4px',
-    color: '#fff',
-    fontSize: '11px',
-    cursor: 'pointer',
-    transition: 'all 0.2s'
+    padding: '6px 12px', backgroundColor: tok.inputBg,
+    border: `1.5px solid ${tok.border}`, borderRadius: '6px',
+    color: tok.orangeText, fontSize: '11px', cursor: 'pointer',
+    fontWeight: '700', fontFamily: "'Nunito', sans-serif",
   },
-  editorContent: {
-    flex: 1,
-    display: 'flex',
-    overflow: 'hidden',
-    position: 'relative'
-  },
+  editorContent: { flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' },
   lineNumbers: {
-    width: '50px',
-    backgroundColor: '#111',
-    borderRight: '1px solid #333',
-    padding: '15px 0',
-    overflowY: 'auto',
-    textAlign: 'right',
-    userSelect: 'none'
+    width: '50px', backgroundColor: tok.panelHeaderBg,
+    borderRight: `1.5px solid ${tok.borderSubtle}`,
+    padding: '15px 0', overflowY: 'auto', textAlign: 'right', userSelect: 'none',
   },
   lineNumber: {
-    color: '#555',
-    fontSize: '12px',
-    fontFamily: "'Monaco', 'Consolas', monospace",
-    lineHeight: '1.6',
-    paddingRight: '10px'
+    color: tok.textMuted, fontSize: '12px',
+    fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', paddingRight: '10px',
   },
   editorTextArea: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    border: 'none',
-    color: '#d4d4d4',
-    fontSize: '13px',
-    fontFamily: "'Monaco', 'Consolas', monospace",
-    lineHeight: '1.6',
-    padding: '15px',
-    resize: 'none',
-    outline: 'none',
-    overflowY: 'auto',
-    whiteSpace: 'pre',
-    tabSize: 4
+    flex: 1, backgroundColor: 'transparent', border: 'none', color: tok.textPrimary,
+    fontSize: '13px', fontFamily: "'DM Mono', 'Monaco', monospace",
+    lineHeight: '1.6', padding: '15px', resize: 'none', outline: 'none',
+    overflowY: 'auto', whiteSpace: 'pre', tabSize: 4,
   },
   editorPre: {
-    flex: 1,
-    margin: 0,
-    color: '#d4d4d4',
-    fontSize: '13px',
-    fontFamily: "'Monaco', 'Consolas', monospace",
-    lineHeight: '1.6',
-    padding: '15px',
-    overflowY: 'auto',
-    whiteSpace: 'pre',
-    tabSize: 4
+    flex: 1, margin: 0, color: tok.textPrimary, fontSize: '13px',
+    fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6',
+    padding: '15px', overflowY: 'auto', whiteSpace: 'pre', tabSize: 4,
   },
   editorFooter: {
-    display: 'flex',
-    gap: '15px',
-    backgroundColor: '#1a1a1a',
-    borderTop: '1px solid #333',
-    padding: '8px 15px',
-    fontSize: '11px',
-    color: '#666'
+    display: 'flex', gap: '15px', backgroundColor: tok.panelBg,
+    borderTop: `1.5px solid ${tok.borderSubtle}`, padding: '8px 15px',
+    fontSize: '11px', color: tok.textMuted,
+    fontFamily: "'DM Mono', monospace",
   },
   editorPlaceholder: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: '#444'
-  }
-};
+    flex: 1, display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center', color: '#d1d5db',
+  },
+
+  // Block sequencer panel
+  blockPanel: {
+    width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column',
+    backgroundColor: tok.cardBg,
+    borderRight: `1.5px solid ${tok.border}`, overflow: 'hidden',
+  },
+  blockPanelHeader: {
+    padding: '10px 12px 8px', borderBottom: `1.5px solid ${tok.borderSubtle}`,
+    display: 'flex', flexDirection: 'column', gap: '6px',
+    backgroundColor: tok.panelHeaderBg,
+  },
+  sequenceNameInput: {
+    backgroundColor: 'transparent', border: 'none',
+    borderBottom: '1.5px solid rgba(235,121,35,0.2)', color: tok.textPrimary,
+    fontSize: '13px', fontWeight: '700', fontFamily: "'Nunito', sans-serif",
+    outline: 'none', padding: '2px 0', width: '100%',
+  },
+  blockList: {
+    flex: 1, overflowY: 'auto' as const, padding: '8px',
+    display: 'flex', flexDirection: 'column', gap: '6px',
+  },
+  blockEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '30px 0', flex: 1,
+  },
+  blockCard: {
+    backgroundColor: tok.inputBg, borderRadius: '10px',
+    borderLeft: `3px solid ${tok.orange}`, padding: '8px 10px',
+    display: 'flex', flexDirection: 'column', gap: '6px',
+    border: `1.5px solid ${tok.border}`,
+    boxShadow: tok.shadow,
+  },
+  blockCardTop: { display: 'flex', alignItems: 'center', gap: '6px' },
+  blockTypeBadge: {
+    fontSize: '9px', fontWeight: '700', letterSpacing: '0.5px',
+    padding: '2px 6px', borderRadius: '4px',
+    textTransform: 'uppercase' as const, flex: 1,
+  },
+  blockControls: { display: 'flex', gap: '2px' },
+  blockCtrlBtn: {
+    backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`,
+    color: tok.textMuted, fontSize: '11px', cursor: 'pointer',
+    borderRadius: '5px', padding: '1px 5px', lineHeight: 1.4,
+    minWidth: '22px', minHeight: '22px', fontWeight: '700',
+  },
+  blockBody: { display: 'flex', flexDirection: 'column' as const, gap: '4px' },
+  blockInput: {
+    backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`,
+    borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', padding: '4px 7px',
+    fontFamily: "'DM Mono', 'Consolas', monospace", outline: 'none',
+    width: '100%', boxSizing: 'border-box' as const,
+  },
+  blockAddArea: {
+    padding: '6px 8px', borderTop: `1.5px solid ${tok.borderSubtle}`,
+    position: 'relative' as const,
+  },
+  btnAddBlock: {
+    width: '100%', padding: '8px',
+    backgroundColor: tok.orangeFaint, border: '1.5px dashed rgba(235,121,35,0.3)',
+    borderRadius: '8px', color: tok.orange, fontSize: '12px',
+    cursor: 'pointer', minHeight: '36px', fontWeight: '700',
+    fontFamily: "'Nunito', sans-serif",
+  },
+  addMenuPopup: {
+    display: 'flex', flexDirection: 'column' as const, gap: '2px',
+    backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`,
+    borderRadius: '10px', overflow: 'hidden',
+    boxShadow: tok.shadow,
+  },
+  addMenuOption: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '9px 12px', backgroundColor: 'transparent', border: 'none',
+    borderBottom: '1px solid rgba(235,121,35,0.08)', color: tok.textPrimary,
+    fontSize: '12px', cursor: 'pointer', textAlign: 'left' as const,
+    gap: '8px', minHeight: '38px', fontFamily: "'Nunito', sans-serif",
+  },
+  blockRunArea: {
+    padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`,
+    display: 'flex', flexDirection: 'column' as const, gap: '6px',
+  },
+  btnRun: {
+    width: '100%', padding: '10px', backgroundColor: tok.green,
+    border: `1.5px solid ${tok.green}55`, borderRadius: '8px',
+    color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+    minHeight: '40px', fontFamily: "'Nunito', sans-serif",
+    boxShadow: '0 2px 8px rgba(22,163,74,0.2)',
+  },
+  btnStop: {
+    width: '100%', padding: '10px', backgroundColor: tok.red,
+    border: `1.5px solid ${tok.red}55`, borderRadius: '8px',
+    color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+    minHeight: '40px', fontFamily: "'Nunito', sans-serif",
+  },
+  blockStats: {
+    textAlign: 'center' as const, color: tok.textMuted, fontSize: '10px',
+    fontFamily: "'DM Mono', 'Monaco', monospace",
+  },
+  blockSettings: {
+    padding: '8px', borderTop: '1.5px solid rgba(235,121,35,0.08)',
+    display: 'flex', flexDirection: 'column' as const, gap: '5px',
+  },
+  settingsSelect: {
+    backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`,
+    borderRadius: '6px', color: tok.orangeText, fontSize: '11px',
+    padding: '3px 5px', outline: 'none', flex: 1,
+  },
+  cmdRefToggle: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    width: '100%', background: 'none', border: 'none', color: tok.textMuted,
+    fontSize: '10px', textTransform: 'uppercase' as const, letterSpacing: '0.8px',
+    cursor: 'pointer', padding: '4px 0', minHeight: '28px',
+    fontFamily: "'Nunito', sans-serif",
+  },
+  cmdRefList: {
+    display: 'flex', flexDirection: 'column' as const, gap: '1px',
+    marginTop: '4px', maxHeight: '220px', overflowY: 'auto' as const,
+  },
+  cmdRefRow: {
+    display: 'grid', gridTemplateColumns: '70px 1fr', gridTemplateRows: 'auto auto',
+    gap: '0 6px', padding: '6px 8px', background: tok.orangeFaint,
+    border: '1.5px solid rgba(235,121,35,0.1)', borderRadius: '7px',
+    cursor: 'pointer', textAlign: 'left' as const, transition: 'background 0.1s',
+    fontFamily: "'Nunito', sans-serif",
+  },
+  cmdRefName: {
+    color: tok.orange, fontSize: '11px',
+    fontFamily: "'DM Mono', 'Monaco', monospace", fontWeight: '600',
+    gridColumn: '1', gridRow: '1',
+  },
+  cmdRefParams: {
+    color: '#f59e0b', fontSize: '10px',
+    fontFamily: "'DM Mono', 'Monaco', monospace",
+    gridColumn: '2', gridRow: '1', alignSelf: 'center',
+  },
+  cmdRefDesc: {
+    color: tok.textMuted, fontSize: '10px',
+    gridColumn: '1 / -1', gridRow: '2', marginTop: '2px',
+  },
+});
 
 export default TotemProgrammingIDE;

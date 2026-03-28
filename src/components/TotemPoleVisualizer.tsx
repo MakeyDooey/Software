@@ -1,15 +1,20 @@
 // src/components/TotemPoleVisualizer.tsx
+// Themed with MakeyDooey light/dark token system
 
 import React, { useState, useEffect } from 'react';
 import type { TotemStatus, PowerState } from '../types/totem';
 import usbService from '../services/usbService';
 import demoModeService from '../services/platform/demoModeService';
+import { useTheme, T, type Tokens } from '../theme/ThemeContext';
 
 interface TotemPoleVisualizerProps {
   onTotemDoubleClick: (totem: TotemStatus) => void;
 }
 
 export const TotemPoleVisualizer: React.FC<TotemPoleVisualizerProps> = ({ onTotemDoubleClick }) => {
+  const { dark } = useTheme();
+  const tok = T(dark);
+
   const [connectedTotems, setConnectedTotems] = useState<TotemStatus[]>([]);
   const [totemPole, setTotemPole] = useState<TotemStatus[]>([]);
   const [selectedTotem, setSelectedTotem] = useState<string | null>(null);
@@ -17,861 +22,300 @@ export const TotemPoleVisualizer: React.FC<TotemPoleVisualizerProps> = ({ onTote
   const [isDemoMode, setIsDemoMode] = useState(false);
 
   useEffect(() => {
-    // Subscribe to USB connection events
-    const unsubscribe = usbService.subscribe((event) => {
+    const unsub = usbService.subscribe((event) => {
       if (event.action === 'connected') {
-        setConnectedTotems(prev => [...prev, event.totem]);
-        addLog('info', `Totem connected: ${event.totem.name}`, 'usb');
+        setConnectedTotems(p => [...p, event.totem]);
       } else {
-        setConnectedTotems(prev => prev.filter(t => t.id !== event.totem.id));
-        setTotemPole(prev => prev.map(t => 
-          t.id === event.totem.id ? { ...t, connected: false } : t
-        ));
-        addLog('warning', `Totem disconnected: ${event.totem.name}`, 'usb');
+        setConnectedTotems(p => p.filter(t => t.id !== event.totem.id));
+        setTotemPole(p => p.map(t => t.id === event.totem.id ? { ...t, connected: false } : t));
       }
     });
-
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
-
-  const addLog = (level: string, message: string, source: string) => {
-    console.log(`[${level.toUpperCase()}] ${source}: ${message}`);
-  };
 
   const startUSBMonitoring = async () => {
     try {
       const granted = await usbService.requestPermission();
-      if (!granted) {
-        alert('USB access denied. Please grant permission to detect totems.');
-        return;
-      }
-
+      if (!granted) { alert('USB access denied.'); return; }
       await usbService.startMonitoring();
       setIsMonitoring(true);
-      
-      const connected = usbService.getConnectedTotems();
-      setConnectedTotems(connected);
-      
-      addLog('info', 'USB monitoring started', 'system');
-    } catch (error) {
-      console.error('Failed to start USB monitoring:', error);
-      alert('Failed to start USB monitoring. Check console for details.');
-    }
+      setConnectedTotems(usbService.getConnectedTotems());
+    } catch { alert('Failed to start USB monitoring.'); }
   };
 
-  const stopUSBMonitoring = () => {
-    usbService.stopMonitoring();
-    setIsMonitoring(false);
-    addLog('info', 'USB monitoring stopped', 'system');
-  };
+  const stopUSBMonitoring = () => { usbService.stopMonitoring(); setIsMonitoring(false); };
 
   const startDemoMode = () => {
-    const demoTotems = demoModeService.startDemoMode();
-    setConnectedTotems(demoTotems);
+    const demo = demoModeService.startDemoMode();
+    setConnectedTotems(demo);
     setIsDemoMode(true);
-    addLog('info', `Demo mode started with ${demoTotems.length} mock totems`, 'demo');
-
-    // Subscribe to demo updates
-    demoModeService.subscribe((updatedTotems) => {
-      setConnectedTotems(prevConnected => {
-        // Only update totems that are still in connected list
-        return prevConnected.map(ct => {
-          const updated = updatedTotems.find(ut => ut.id === ct.id);
-          return updated || ct;
-        });
-      });
-      
-      setTotemPole(prev => prev.map(poleTotem => {
-        const updated = updatedTotems.find(t => t.id === poleTotem.id);
-        return updated ? updated : poleTotem;
-      }));
+    demoModeService.subscribe((updated) => {
+      setConnectedTotems(p => p.map(c => updated.find(u => u.id === c.id) || c));
+      setTotemPole(p => p.map(c => updated.find(u => u.id === c.id) || c));
     });
   };
 
   const stopDemoMode = () => {
     demoModeService.stopDemoMode();
-    setConnectedTotems([]);
-    setTotemPole([]);
-    setIsDemoMode(false);
-    addLog('info', 'Demo mode stopped', 'demo');
+    setConnectedTotems([]); setTotemPole([]); setIsDemoMode(false);
   };
 
-  const addTotemToPole = (totem: TotemStatus) => {
-    const newPosition = totemPole.length;
-    const totemWithPosition = { ...totem, position: newPosition };
-    
-    setTotemPole(prev => [...prev, totemWithPosition]);
-    setConnectedTotems(prev => prev.filter(t => t.id !== totem.id));
-    
-    addLog('info', `Added ${totem.name} to totem pole at position ${newPosition}`, 'visualizer');
+  const addToPole = (t: TotemStatus) => {
+    setTotemPole(p => [...p, { ...t, position: p.length }]);
+    setConnectedTotems(p => p.filter(c => c.id !== t.id));
   };
-
-  const removeTotemFromPole = (totemId: string) => {
-    const totem = totemPole.find(t => t.id === totemId);
-    if (!totem) return;
-
-    setTotemPole(prev => prev.filter(t => t.id !== totemId).map((t, i) => ({ ...t, position: i })));
-    
-    if (totem.connected) {
-      setConnectedTotems(prev => [...prev, totem]);
-    }
-    
-    addLog('info', `Removed ${totem.name} from totem pole`, 'visualizer');
+  const removeFromPole = (id: string) => {
+    const t = totemPole.find(x => x.id === id);
+    if (!t) return;
+    setTotemPole(p => p.filter(x => x.id !== id).map((x, i) => ({ ...x, position: i })));
+    if (t.connected) setConnectedTotems(p => [...p, t]);
   };
+  const moveUp = (id: string) => setTotemPole(p => {
+    const i = p.findIndex(x => x.id === id); if (i <= 0) return p;
+    const a = [...p]; [a[i], a[i-1]] = [a[i-1], a[i]]; return a.map((x,j) => ({...x,position:j}));
+  });
+  const moveDown = (id: string) => setTotemPole(p => {
+    const i = p.findIndex(x => x.id === id); if (i < 0 || i >= p.length-1) return p;
+    const a = [...p]; [a[i], a[i+1]] = [a[i+1], a[i]]; return a.map((x,j) => ({...x,position:j}));
+  });
 
-  const moveTotemUp = (totemId: string) => {
-    setTotemPole(prev => {
-      const index = prev.findIndex(t => t.id === totemId);
-      if (index <= 0) return prev;
-
-      const newPole = [...prev];
-      [newPole[index], newPole[index - 1]] = [newPole[index - 1], newPole[index]];
-      
-      return newPole.map((t, i) => ({ ...t, position: i }));
-    });
-  };
-
-  const moveTotemDown = (totemId: string) => {
-    setTotemPole(prev => {
-      const index = prev.findIndex(t => t.id === totemId);
-      if (index < 0 || index >= prev.length - 1) return prev;
-
-      const newPole = [...prev];
-      [newPole[index], newPole[index + 1]] = [newPole[index + 1], newPole[index]];
-      
-      return newPole.map((t, i) => ({ ...t, position: i }));
-    });
-  };
+  const active = isMonitoring || isDemoMode;
 
   return (
-    <div style={styles.container}>
-      {/* Connection Panel */}
-      <div style={styles.connectionPanel}>
-        <h3 style={styles.panelTitle}>Connection</h3>
-        
-        {!isMonitoring && !isDemoMode ? (
-          <>
-            <button style={styles.btnPrimary} onClick={startUSBMonitoring}>
-              🔌 Connect USB Hardware
-            </button>
-            <button style={styles.btnDemo} onClick={startDemoMode}>
-              🎬 Start Demo Mode
-            </button>
-          </>
-        ) : isDemoMode ? (
-          <button style={styles.btnSecondary} onClick={stopDemoMode}>
-            🎬 Stop Demo Mode
-          </button>
-        ) : (
-          <button style={styles.btnSecondary} onClick={stopUSBMonitoring}>
-            🔌 Disconnect
-          </button>
-        )}
+    <div style={{ height: '100vh', background: tok.pageBg, display: 'flex', flexDirection: 'column', fontFamily: "'Nunito','Helvetica Neue',sans-serif", overflow: 'hidden', transition: 'background 0.3s' }}>
 
-        <div style={styles.statusIndicator}>
+      {/* Top bar */}
+      <div style={{
+        background: tok.cardBg, backdropFilter: 'blur(12px)',
+        borderBottom: `1.5px solid ${tok.border}`,
+        padding: '12px 20px 12px 200px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: '12px', boxShadow: tok.shadow, flexShrink: 0,
+        transition: 'background 0.3s, border-color 0.3s',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ width: 32, height: 32, background: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>⚙️</div>
+          <span style={{ fontWeight: 800, fontSize: 16, color: tok.textPrimary }}>MakeyDooey IDE</span>
           <span style={{
-            ...styles.statusDot,
-            backgroundColor: (isMonitoring || isDemoMode) ? '#4CAF50' : '#888'
-          }} />
-          <span style={styles.statusText}>
-            {isDemoMode ? '🎬 Demo Mode Active' : isMonitoring ? 'USB Monitoring' : 'Not Connected'}
+            display: 'inline-flex', alignItems: 'center',
+            padding: '3px 10px', borderRadius: 20,
+            border: `1.5px solid ${active ? `${tok.green}55` : tok.borderSubtle}`,
+            background: active ? tok.greenFaint : tok.orangeFaint,
+            fontSize: 11, fontWeight: 700,
+            color: active ? tok.greenText : tok.textMuted,
+          }}>
+            <span style={{ fontSize: 8, marginRight: 5 }}>●</span>
+            {isDemoMode ? 'Demo Mode' : isMonitoring ? 'USB Active' : 'Not Connected'}
           </span>
         </div>
 
-        {!usbService.isSupported() && !isDemoMode && (
-          <div style={styles.warningBox}>
-            ⚠️ Web Serial API not supported. Use Demo Mode or switch to Chrome/Edge.
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {!isMonitoring && !isDemoMode ? (
+            <>
+              <Btn tok={tok} onClick={startUSBMonitoring} variant="outline">🔌 Connect USB</Btn>
+              <Btn tok={tok} onClick={startDemoMode} variant="orange">🎬 Demo Mode</Btn>
+            </>
+          ) : isDemoMode ? (
+            <Btn tok={tok} onClick={stopDemoMode} variant="ghost">Stop Demo</Btn>
+          ) : (
+            <Btn tok={tok} onClick={stopUSBMonitoring} variant="ghost">Disconnect</Btn>
+          )}
+          {!usbService.isSupported() && !isDemoMode && (
+            <span style={{ padding: '5px 10px', background: tok.amberFaint, border: `1.5px solid ${tok.amber}55`, borderRadius: 8, fontSize: 11, color: tok.amberText, fontWeight: 700 }}>⚠️ Chrome/Edge required</span>
+          )}
+        </div>
+      </div>
+
+      {/* Three-column body */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+
+        {/* Detected totems */}
+        <div style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', background: tok.panelBg, borderRight: `1.5px solid ${tok.border}`, overflow: 'hidden', transition: 'background 0.3s' }}>
+          <PanelHeader tok={tok} title="Detected Totems" count={connectedTotems.length} />
+          <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {connectedTotems.length === 0
+              ? <EmptyState tok={tok} icon="🔍" text={isDemoMode ? 'All totems added!' : isMonitoring ? 'No totems on USB' : 'Start Demo Mode or\nConnect USB to begin'} />
+              : connectedTotems.map(t => <DetectedCard key={t.id} tok={tok} totem={t} onAdd={() => addToPole(t)} />)
+            }
           </div>
-        )}
-      </div>
-
-      <div style={styles.mainArea}>
-        {/* Detected Totems Sidebar */}
-        <div style={styles.sidebar}>
-          <h3 style={styles.sidebarTitle}>
-            Detected Totems ({connectedTotems.length})
-          </h3>
-          
-          {connectedTotems.length === 0 ? (
-            <div style={styles.emptyMessage}>
-              {isDemoMode ? 
-                'All totems added to pole!' :
-                isMonitoring ? 
-                'No totems detected on USB bus.' :
-                'Click "Connect USB" or "Demo Mode" to start.'
-              }
-            </div>
-          ) : (
-            <div style={styles.totemList}>
-              {connectedTotems.map(totem => (
-                <ConnectedTotemCard
-                  key={totem.id}
-                  totem={totem}
-                  onAddToPole={() => addTotemToPole(totem)}
-                />
-              ))}
-            </div>
-          )}
         </div>
 
-        {/* Totem Pole Visualizer */}
-        <div style={styles.visualizerArea}>
-          <h3 style={styles.visualizerTitle}>
-            Totem Pole Configuration ({totemPole.length} totems)
-          </h3>
-          
-          {totemPole.length === 0 ? (
-            <div style={styles.emptyPole}>
-              <div style={styles.emptyPoleIcon}>🗿</div>
-              <div style={styles.emptyPoleText}>
-                No totems in the pole yet
-              </div>
-              <div style={styles.emptyPoleSubtext}>
-                {isDemoMode || isMonitoring ? 
-                  'Add totems from the detected list →' :
-                  'Start Demo Mode to see mock totems'}
-              </div>
-            </div>
-          ) : (
-            <div style={styles.totemPoleStack}>
-              {[...totemPole].reverse().map((totem, visualIndex) => {
-                const actualIndex = totemPole.length - 1 - visualIndex;
-                return (
-                  <TotemIcon
-                    key={totem.id}
-                    totem={totem}
-                    isSelected={selectedTotem === totem.id}
-                    onSelect={() => setSelectedTotem(totem.id)}
-                    onDoubleClick={() => onTotemDoubleClick(totem)}
-                    onRemove={() => removeTotemFromPole(totem.id)}
-                    onMoveUp={actualIndex < totemPole.length - 1 ? () => moveTotemUp(totem.id) : undefined}
-                    onMoveDown={actualIndex > 0 ? () => moveTotemDown(totem.id) : undefined}
-                  />
-                );
-              })}
-              
-              <div style={styles.poleBase}>
-                <div style={styles.baseLabel}>BASE PLATFORM</div>
-              </div>
-            </div>
-          )}
+        {/* Totem pole */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <PanelHeader tok={tok} title="Totem Pole" count={totemPole.length} />
+          <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+            {totemPole.length === 0
+              ? <EmptyState tok={tok} icon="🗿" text={'No totems yet\nAdd from the sidebar'} />
+              : <>
+                  {[...totemPole].reverse().map(t => {
+                    const idx = totemPole.findIndex(x => x.id === t.id);
+                    return (
+                      <TotemBlock key={t.id} tok={tok} totem={t}
+                        isSelected={selectedTotem === t.id}
+                        onSelect={() => setSelectedTotem(t.id)}
+                        onDoubleClick={() => onTotemDoubleClick(t)}
+                        onRemove={() => removeFromPole(t.id)}
+                        onMoveUp={idx < totemPole.length - 1 ? () => moveUp(t.id) : undefined}
+                        onMoveDown={idx > 0 ? () => moveDown(t.id) : undefined}
+                      />
+                    );
+                  })}
+                  <div style={{ width: '100%', maxWidth: 380, height: 48, background: tok.orangeFaint, border: `2px dashed ${tok.border}`, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: tok.orangeText, letterSpacing: 2 }}>
+                    BASE PLATFORM
+                  </div>
+                </>
+            }
+          </div>
         </div>
 
-        {/* Totem Details Panel */}
-        <div style={styles.detailsPanel}>
-          <h3 style={styles.detailsTitle}>Totem Details</h3>
-          
-          {selectedTotem ? (
-            (() => {
-              const totem = totemPole.find(t => t.id === selectedTotem);
-              return totem ? <TotemDetailsView totem={totem} onDoubleClick={onTotemDoubleClick} /> : (
-                <div style={styles.emptyMessage}>Totem not found</div>
-              );
-            })()
-          ) : (
-            <div style={styles.emptyMessage}>
-              Select a totem to view details
-            </div>
-          )}
+        {/* Details */}
+        <div style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', background: tok.panelBg, borderLeft: `1.5px solid ${tok.border}`, overflow: 'hidden', transition: 'background 0.3s' }}>
+          <PanelHeader tok={tok} title="Details" />
+          <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
+            {selectedTotem
+              ? (() => { const t = totemPole.find(x => x.id === selectedTotem); return t ? <TotemDetails tok={tok} totem={t} onProgram={() => onTotemDoubleClick(t)} /> : null; })()
+              : <EmptyState tok={tok} icon="📋" text="Select a totem to view details" />
+            }
+          </div>
         </div>
       </div>
     </div>
   );
 };
 
-// Connected Totem Card Component
-const ConnectedTotemCard: React.FC<{
-  totem: TotemStatus;
-  onAddToPole: () => void;
-}> = ({ totem, onAddToPole }) => {
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function PanelHeader({ tok, title, count }: { tok: Tokens; title: string; count?: number }) {
   return (
-    <div style={styles.totemCard}>
-      <div style={styles.totemCardIcon}>
-        {getTotemEmoji(totem.type)}
-      </div>
-      <div style={styles.totemCardInfo}>
-        <div style={styles.totemCardName}>{totem.name}</div>
-        <div style={styles.totemCardType}>{totem.type}</div>
-        <div style={styles.totemCardSerial}>S/N: {totem.serialNumber}</div>
-      </div>
-      <button style={styles.addButton} onClick={onAddToPole} title="Add to totem pole">
-        ➕
-      </button>
+    <div style={{ padding: '14px 16px 12px', borderBottom: `1.5px solid ${tok.border}`, background: tok.panelHeaderBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, transition: 'background 0.3s' }}>
+      <span style={{ fontWeight: 800, fontSize: 13, color: tok.textPrimary }}>{title}</span>
+      {count !== undefined && (
+        <span style={{ background: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: 12, padding: '1px 9px', fontSize: 12, fontWeight: 700, color: tok.orangeText }}>{count}</span>
+      )}
     </div>
   );
-};
+}
 
-// Totem Icon in Pole
-const TotemIcon: React.FC<{
-  totem: TotemStatus;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDoubleClick: () => void;
-  onRemove: () => void;
-  onMoveUp?: () => void;
-  onMoveDown?: () => void;
-}> = ({ totem, isSelected, onSelect, onDoubleClick, onRemove, onMoveUp, onMoveDown }) => {
+function EmptyState({ tok, icon, text }: { tok: Tokens; icon: string; text: string }) {
   return (
-    <div
-      style={{
-        ...styles.totemIcon,
-        ...(isSelected ? styles.totemIconSelected : {}),
-        ...(totem.connected ? {} : styles.totemIconDisconnected)
-      }}
-      onClick={onSelect}
-      onDoubleClick={onDoubleClick}
-    >
-      <div style={styles.totemVisual}>
-        <div style={styles.totemEmoji}>{getTotemEmoji(totem.type)}</div>
-        <div style={styles.totemName}>{totem.name}</div>
-      </div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '30px 0' }}>
+      <span style={{ fontSize: 36, opacity: 0.25 }}>{icon}</span>
+      <span style={{ fontSize: 12, color: tok.textMuted, textAlign: 'center', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{text}</span>
+    </div>
+  );
+}
 
-      {/* Status Indicators */}
-      <div style={styles.statusBar}>
-        <StatusIndicator
-          icon="⚡"
-          label="Power"
-          status={totem.powerState}
-          color={getPowerColor(totem.powerState)}
-          tooltip={`Power: ${totem.powerState}${totem.voltage ? ` (${totem.voltage.toFixed(2)}V)` : ''}`}
-        />
-        <StatusIndicator
-          icon="💾"
-          label="Program"
-          status={totem.programmingState}
-          color={getProgrammingColor(totem.programmingState)}
-          tooltip={`Programming: ${totem.programmingState}`}
-        />
-        <StatusIndicator
-          icon="▶️"
-          label="Runtime"
-          status={totem.runtimeState}
-          color={getRuntimeColor(totem.runtimeState)}
-          tooltip={`Runtime: ${totem.runtimeState}`}
-        />
-        {totem.softwareFault !== 'none' && (
-          <StatusIndicator
-            icon="⚠️"
-            label="SW Fault"
-            status={totem.softwareFault}
-            color="#FF9800"
-            tooltip={`Software Fault: ${totem.softwareFault}`}
-          />
-        )}
-        {totem.hardwareFault !== 'none' && (
-          <StatusIndicator
-            icon="🔧"
-            label="HW Fault"
-            status={totem.hardwareFault}
-            color="#F44336"
-            tooltip={`Hardware Fault: ${totem.hardwareFault}`}
-          />
-        )}
-      </div>
+function Btn({ tok, children, onClick, variant }: { tok: Tokens; children: React.ReactNode; onClick: () => void; variant: 'orange'|'outline'|'ghost' }) {
+  const [h, setH] = useState(false);
+  const vs: Record<string, React.CSSProperties> = {
+    orange: { background: h ? tok.orangeHover : tok.orange, color: '#fff', border: 'none', boxShadow: h ? `0 4px 14px ${tok.orangeSubtle}` : `0 2px 8px ${tok.orangeSubtle}` },
+    outline: { background: h ? tok.orangeFaint : tok.cardBg, color: tok.orangeText, border: `1.5px solid ${tok.border}` },
+    ghost:  { background: h ? tok.purpleFaint : 'transparent', color: tok.purple, border: `1.5px solid ${h ? tok.purple+'55' : tok.borderSubtle}` },
+  };
+  return (
+    <button onClick={onClick} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
+      style={{ padding: '8px 16px', borderRadius: 9, fontSize: 13, fontFamily: "'Nunito',sans-serif", fontWeight: 700, cursor: 'pointer', transition: 'background 0.15s, box-shadow 0.15s', display: 'inline-flex', alignItems: 'center', gap: 5, ...vs[variant] }}>
+      {children}
+    </button>
+  );
+}
 
-      <div style={styles.positionBadge}>
-        Pos {totem.position}
+function DetectedCard({ tok, totem, onAdd }: { tok: Tokens; totem: TotemStatus; onAdd: () => void }) {
+  const [h, setH] = useState(false);
+  return (
+    <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 12px', borderRadius: 12, border: `1.5px solid ${h ? tok.borderStrong : tok.border}`, background: h ? tok.surfaceHover : tok.cardBg, transition: 'background 0.15s, border-color 0.15s', boxShadow: tok.shadow }}>
+      <span style={{ fontSize: 28 }}>{getEmoji(totem.type)}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: tok.textPrimary }}>{totem.name}</div>
+        <div style={{ fontSize: 11, color: tok.textMuted, marginTop: 1 }}>{totem.type}</div>
+        <div style={{ fontSize: 10, color: tok.textMuted, fontFamily: "'DM Mono',monospace", marginTop: 1 }}>S/N: {totem.serialNumber}</div>
       </div>
+      <button onClick={onAdd} style={{ width: 30, height: 30, borderRadius: 8, background: tok.orange, color: '#fff', border: 'none', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, boxShadow: `0 2px 8px ${tok.orangeSubtle}`, transition: 'background 0.15s' }}>＋</button>
+    </div>
+  );
+}
 
+function TotemBlock({ tok, totem, isSelected, onSelect, onDoubleClick, onRemove, onMoveUp, onMoveDown }: {
+  tok: Tokens; totem: TotemStatus; isSelected: boolean;
+  onSelect: () => void; onDoubleClick: () => void; onRemove: () => void;
+  onMoveUp?: () => void; onMoveDown?: () => void;
+}) {
+  return (
+    <div onClick={onSelect} onDoubleClick={onDoubleClick}
+      style={{ width: '100%', maxWidth: 380, background: tok.cardBg, borderRadius: 14, border: `1.5px solid ${isSelected ? tok.orange : tok.border}`, padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8, opacity: totem.connected ? 1 : 0.5, boxShadow: isSelected ? `0 0 0 3px ${tok.orangeSubtle}, ${tok.shadow}` : tok.shadow, transition: 'border-color 0.15s, box-shadow 0.15s, background 0.3s' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 28 }}>{getEmoji(totem.type)}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: tok.textPrimary }}>{totem.name}</div>
+          <div style={{ fontSize: 11, color: tok.textMuted }}>Pos {totem.position}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 5 }}>
+          {[getPowerColor(totem.powerState), getProgrammingColor(totem.programmingState), getRuntimeColor(totem.runtimeState)].map((c, i) => (
+            <span key={i} style={{ width: 9, height: 9, borderRadius: '50%', background: c, display: 'block', border: `1.5px solid ${tok.cardBg}` }} />
+          ))}
+        </div>
+      </div>
       {isSelected && (
-        <div style={styles.totemActions}>
-          {onMoveUp && (
-            <button style={styles.actionBtn} onClick={(e) => { e.stopPropagation(); onMoveUp(); }} title="Move up">
-              ⬆️
-            </button>
-          )}
-          {onMoveDown && (
-            <button style={styles.actionBtn} onClick={(e) => { e.stopPropagation(); onMoveDown(); }} title="Move down">
-              ⬇️
-            </button>
-          )}
-          <button style={styles.actionBtnRemove} onClick={(e) => { e.stopPropagation(); onRemove(); }} title="Remove from pole">
-            ❌
-          </button>
+        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6, paddingTop: 4, borderTop: `1px solid ${tok.border}` }}>
+          {onMoveUp && <MiniBtn tok={tok} onClick={onMoveUp}>↑ Up</MiniBtn>}
+          {onMoveDown && <MiniBtn tok={tok} onClick={onMoveDown}>↓ Down</MiniBtn>}
+          <MiniBtn tok={tok} onClick={onRemove} danger>✕ Remove</MiniBtn>
         </div>
       )}
     </div>
   );
-};
+}
 
-// Status Indicator Component
-const StatusIndicator: React.FC<{
-  icon: string;
-  label: string;
-  status: string;
-  color: string;
-  tooltip: string;
-}> = ({ icon, label, status, color, tooltip }) => {
+function MiniBtn({ tok, children, onClick, danger }: { tok: Tokens; children: React.ReactNode; onClick: () => void; danger?: boolean }) {
+  const [h, setH] = useState(false);
   return (
-    <div style={styles.indicator} title={tooltip}>
-      <span style={{ fontSize: '16px' }}>{icon}</span>
-      <div style={{ ...styles.indicatorDot, backgroundColor: color }} />
-    </div>
+    <button onClick={onClick} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
+      style={{ padding: '4px 10px', border: `1.5px solid ${danger ? tok.red+'44' : tok.border}`, borderRadius: 6, background: h ? (danger ? tok.redFaint : tok.orangeFaint) : 'transparent', color: danger ? tok.red : tok.orangeText, fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'background 0.12s', fontFamily: "'Nunito',sans-serif" }}>
+      {children}
+    </button>
   );
-};
+}
 
-// Totem Details View
-const TotemDetailsView: React.FC<{ totem: TotemStatus; onDoubleClick: (totem: TotemStatus) => void }> = ({ totem, onDoubleClick }) => {
+function TotemDetails({ tok, totem, onProgram }: { tok: Tokens; totem: TotemStatus; onProgram: () => void }) {
   return (
-    <div style={styles.detailsContent}>
-      <div style={styles.detailSection}>
-        <h4 style={styles.detailSectionTitle}>Basic Info</h4>
-        <DetailRow label="Type" value={totem.type} />
-        <DetailRow label="Serial #" value={totem.serialNumber} />
-        <DetailRow label="Position" value={`${totem.position}`} />
-        <DetailRow label="Bus Address" value={`0x${totem.busAddress.toString(16).toUpperCase()}`} />
-      </div>
-
-      <div style={styles.detailSection}>
-        <h4 style={styles.detailSectionTitle}>⚡ Power Status</h4>
-        <DetailRow label="State" value={totem.powerState} color={getPowerColor(totem.powerState)} />
-        {totem.voltage !== undefined && (
-          <DetailRow label="Voltage" value={`${totem.voltage.toFixed(2)}V`} />
-        )}
-        {totem.current !== undefined && (
-          <DetailRow label="Current" value={`${totem.current.toFixed(1)}mA`} />
-        )}
-      </div>
-
-      <div style={styles.detailSection}>
-        <h4 style={styles.detailSectionTitle}>💾 Programming</h4>
-        <DetailRow label="State" value={totem.programmingState} color={getProgrammingColor(totem.programmingState)} />
-        {totem.firmwareVersion && (
-          <DetailRow label="Firmware" value={totem.firmwareVersion} />
-        )}
-        {totem.lastProgrammed && (
-          <DetailRow label="Last Programmed" value={totem.lastProgrammed.toLocaleString()} />
-        )}
-      </div>
-
-      <div style={styles.detailSection}>
-        <h4 style={styles.detailSectionTitle}>▶️ Runtime</h4>
-        <DetailRow label="State" value={totem.runtimeState} color={getRuntimeColor(totem.runtimeState)} />
-        {totem.uptime !== undefined && (
-          <DetailRow label="Uptime" value={`${Math.floor(totem.uptime / 60)}m ${totem.uptime % 60}s`} />
-        )}
-      </div>
-
-      {(totem.softwareFault !== 'none' || totem.hardwareFault !== 'none') && (
-        <div style={styles.detailSection}>
-          <h4 style={styles.detailSectionTitle}>⚠️ Faults</h4>
-          {totem.softwareFault !== 'none' && (
-            <DetailRow label="Software" value={totem.softwareFault} color="#FF9800" />
-          )}
-          {totem.hardwareFault !== 'none' && (
-            <DetailRow label="Hardware" value={totem.hardwareFault} color="#F44336" />
-          )}
-          {totem.faultDetails && (
-            <DetailRow label="Details" value={totem.faultDetails} />
-          )}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {[
+        { title: 'Basic Info', rows: [['Type', totem.type], ['Serial #', totem.serialNumber], ['Position', `${totem.position}`], ['Bus Address', `0x${totem.busAddress.toString(16).toUpperCase()}`]] },
+        { title: '⚡ Power', rows: [['State', totem.powerState, getPowerColor(totem.powerState)], ...(totem.voltage !== undefined ? [['Voltage', `${totem.voltage.toFixed(2)}V`]] : []), ...(totem.current !== undefined ? [['Current', `${totem.current.toFixed(1)}mA`]] : [])] },
+        { title: '💾 Programming', rows: [['State', totem.programmingState, getProgrammingColor(totem.programmingState)], ...(totem.firmwareVersion ? [['Firmware', totem.firmwareVersion]] : [])] },
+      ].map(({ title, rows }) => (
+        <div key={title} style={{ background: tok.cardBg, border: `1.5px solid ${tok.border}`, borderRadius: 12, padding: '12px 14px', transition: 'background 0.3s' }}>
+          <div style={{ fontWeight: 800, fontSize: 11, color: tok.orange, letterSpacing: '0.3px', marginBottom: 10, textTransform: 'uppercase' }}>{title}</div>
+          {(rows as [string, string, string?][]).map(([label, value, color]) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12 }}>
+              <span style={{ color: tok.textMuted }}>{label}</span>
+              <span style={{ color: color || tok.textPrimary, fontWeight: 600 }}>{value}</span>
+            </div>
+          ))}
         </div>
-      )}
-
-      <button style={styles.programButton} onClick={() => onDoubleClick(totem)}>
+      ))}
+      <button onClick={onProgram}
+        style={{ width: '100%', padding: 12, background: tok.orange, border: 'none', borderRadius: 10, color: '#fff', fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: `0 3px 12px ${tok.orangeSubtle}`, transition: 'background 0.15s' }}
+        onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.background = tok.orangeHover}
+        onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.background = tok.orange}>
         💾 Program This Totem
       </button>
     </div>
   );
-};
-
-// Detail Row Component
-const DetailRow: React.FC<{ label: string; value: string; color?: string }> = ({ label, value, color }) => {
-  return (
-    <div style={styles.detailRow}>
-      <span style={styles.detailLabel}>{label}:</span>
-      <span style={{ ...styles.detailValue, ...(color ? { color } : {}) }}>{value}</span>
-    </div>
-  );
-};
-
-// Helper functions
-function getTotemEmoji(type: string): string {
-  const emojiMap: Record<string, string> = {
-    'mcu-controller': '🖥️',
-    'sensor-temp': '🌡️',
-    'sensor-voltage': '⚡',
-    'actuator-pwm': '📡',
-    'actuator-relay': '🔌',
-    'comm-uart': '📤',
-    'comm-i2c': '🔗',
-    'power-mppt': '🔋',
-    'unknown': '❓'
-  };
-  return emojiMap[type] || '📦';
 }
 
-function getPowerColor(state: PowerState): string {
-  switch (state) {
-    case 'powered': return '#4CAF50';
-    case 'unpowered': return '#888';
-    case 'low-voltage': return '#FF9800';
-    case 'overvoltage': return '#F44336';
-    default: return '#888';
-  }
+function getEmoji(type: string) {
+  return ({ 'mcu-controller':'🖥️','sensor-temp':'🌡️','sensor-voltage':'⚡','actuator-pwm':'📡','actuator-relay':'🔌','comm-uart':'📤','comm-i2c':'🔗','power-mppt':'🔋','unknown':'❓' } as Record<string,string>)[type] || '📦';
 }
-
-function getProgrammingColor(state: string): string {
-  switch (state) {
-    case 'programmed': return '#4CAF50';
-    case 'programming': return '#2196F3';
-    case 'not-programmed': return '#888';
-    case 'failed': return '#F44336';
-    default: return '#888';
-  }
+function getPowerColor(s: PowerState) {
+  return s==='powered'?'#22c55e':s==='low-voltage'?'#f59e0b':s==='overvoltage'?'#ef4444':'#6b7280';
 }
-
-function getRuntimeColor(state: string): string {
-  switch (state) {
-    case 'running': return '#4CAF50';
-    case 'paused': return '#FF9800';
-    case 'stopped': return '#888';
-    case 'fault': return '#F44336';
-    case 'idle': return '#2196F3';
-    default: return '#888';
-  }
+function getProgrammingColor(s: string) {
+  return s==='programmed'?'#22c55e':s==='programming'?'#3b82f6':s==='failed'?'#ef4444':'#6b7280';
 }
-
-// Styles
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-    backgroundColor: '#1e1e1e',
-    color: '#fff',
-  },
-  connectionPanel: {
-    padding: '20px',
-    backgroundColor: '#252526',
-    borderBottom: '1px solid #333',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '20px',
-    flexWrap: 'wrap',
-  },
-  panelTitle: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    margin: 0,
-  },
-  btnPrimary: {
-    backgroundColor: '#007acc',
-    color: 'white',
-    border: 'none',
-    padding: '10px 20px',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: '600',
-  },
-  btnDemo: {
-    backgroundColor: '#FF9800',
-    color: 'white',
-    border: 'none',
-    padding: '10px 20px',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: '600',
-  },
-  btnSecondary: {
-    backgroundColor: '#6c757d',
-    color: 'white',
-    border: 'none',
-    padding: '10px 20px',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: '600',
-  },
-  statusIndicator: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  statusDot: {
-    width: '12px',
-    height: '12px',
-    borderRadius: '50%',
-  },
-  statusText: {
-    fontSize: '14px',
-    color: '#ccc',
-  },
-  warningBox: {
-    backgroundColor: '#332200',
-    color: '#ffaa00',
-    padding: '10px 15px',
-    borderRadius: '6px',
-    fontSize: '13px',
-    border: '1px solid #664400',
-  },
-  mainArea: {
-    display: 'flex',
-    flex: 1,
-    overflow: 'hidden',
-  },
-  sidebar: {
-    width: '280px',
-    backgroundColor: '#252526',
-    borderRight: '1px solid #333',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  sidebarTitle: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    padding: '20px',
-    margin: 0,
-    borderBottom: '1px solid #333',
-  },
-  emptyMessage: {
-    padding: '20px',
-    color: '#888',
-    fontSize: '14px',
-    textAlign: 'center',
-  },
-  totemList: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: '10px',
-  },
-  totemCard: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    padding: '12px',
-    backgroundColor: '#2d2d2d',
-    borderRadius: '8px',
-    marginBottom: '8px',
-    border: '1px solid #444',
-  },
-  totemCardIcon: {
-    fontSize: '32px',
-  },
-  totemCardInfo: {
-    flex: 1,
-  },
-  totemCardName: {
-    fontSize: '14px',
-    fontWeight: 'bold',
-    marginBottom: '2px',
-  },
-  totemCardType: {
-    fontSize: '12px',
-    color: '#888',
-    marginBottom: '2px',
-  },
-  totemCardSerial: {
-    fontSize: '11px',
-    color: '#666',
-  },
-  addButton: {
-    backgroundColor: '#4CAF50',
-    color: 'white',
-    border: 'none',
-    borderRadius: '50%',
-    width: '36px',
-    height: '36px',
-    fontSize: '18px',
-    cursor: 'pointer',
-  },
-  visualizerArea: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  visualizerTitle: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    padding: '20px',
-    margin: 0,
-    borderBottom: '1px solid #333',
-  },
-  emptyPole: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '15px',
-  },
-  emptyPoleIcon: {
-    fontSize: '64px',
-    opacity: 0.3,
-  },
-  emptyPoleText: {
-    fontSize: '18px',
-    color: '#888',
-  },
-  emptyPoleSubtext: {
-    fontSize: '14px',
-    color: '#666',
-  },
-  totemPoleStack: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    alignItems: 'center',
-  },
-  totemIcon: {
-    width: '320px',
-    backgroundColor: '#2d2d2d',
-    border: '2px solid #444',
-    borderRadius: '12px',
-    padding: '15px',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    position: 'relative',
-  },
-  totemIconSelected: {
-    border: '2px solid #007acc',
-    boxShadow: '0 0 15px rgba(0, 122, 204, 0.5)',
-  },
-  totemIconDisconnected: {
-    opacity: 0.5,
-    border: '2px dashed #666',
-  },
-  totemVisual: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '15px',
-    marginBottom: '10px',
-  },
-  totemEmoji: {
-    fontSize: '36px',
-  },
-  totemName: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-  },
-  statusBar: {
-    display: 'flex',
-    gap: '12px',
-    marginTop: '10px',
-  },
-  indicator: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '4px',
-  },
-  indicatorDot: {
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
-  },
-  positionBadge: {
-    position: 'absolute',
-    top: '10px',
-    right: '10px',
-    backgroundColor: '#007acc',
-    color: 'white',
-    padding: '4px 10px',
-    borderRadius: '12px',
-    fontSize: '11px',
-    fontWeight: 'bold',
-  },
-  totemActions: {
-    position: 'absolute',
-    bottom: '10px',
-    right: '10px',
-    display: 'flex',
-    gap: '6px',
-  },
-  actionBtn: {
-    backgroundColor: '#007acc',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    padding: '6px 10px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  actionBtnRemove: {
-    backgroundColor: '#F44336',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    padding: '6px 10px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  poleBase: {
-    width: '360px',
-    height: '60px',
-    backgroundColor: '#444',
-    borderRadius: '8px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: '10px',
-    border: '2px solid #666',
-  },
-  baseLabel: {
-    fontSize: '18px',
-    fontWeight: 'bold',
-    color: '#ccc',
-  },
-  detailsPanel: {
-    width: '320px',
-    backgroundColor: '#252526',
-    borderLeft: '1px solid #333',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  detailsTitle: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    padding: '20px',
-    margin: 0,
-    borderBottom: '1px solid #333',
-  },
-  detailsContent: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: '20px',
-  },
-  detailSection: {
-    marginBottom: '20px',
-  },
-  detailSectionTitle: {
-    fontSize: '14px',
-    fontWeight: 'bold',
-    marginBottom: '10px',
-    color: '#007acc',
-  },
-  detailRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    marginBottom: '8px',
-    fontSize: '13px',
-  },
-  detailLabel: {
-    color: '#888',
-  },
-  detailValue: {
-    color: '#fff',
-    fontWeight: '500',
-  },
-  programButton: {
-    width: '100%',
-    backgroundColor: '#4CAF50',
-    color: 'white',
-    border: 'none',
-    padding: '12px',
-    borderRadius: '8px',
-    fontSize: '14px',
-    fontWeight: 'bold',
-    cursor: 'pointer',
-    marginTop: '20px',
-  },
-};
+function getRuntimeColor(s: string) {
+  return s==='running'?'#22c55e':s==='paused'?'#f59e0b':s==='fault'?'#ef4444':s==='idle'?'#3b82f6':'#6b7280';
+}
 
 export default TotemPoleVisualizer;

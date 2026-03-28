@@ -5,50 +5,33 @@
 ![MakeyDooey Platform](https://img.shields.io/badge/Platform-STM32%20%7C%20ESP32-blue)
 ![PWA Ready](https://img.shields.io/badge/PWA-Ready-green)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
-![React](https://img.shields.io/badge/React-18.x-61dafb)
+![React](https://img.shields.io/badge/React-19.x-61dafb)
 
 ## 🚀 Features
 
 ### 🔌 Device Management
-- **Automatic USB Detection** - Recognizes STM32 Nucleo and ESP32 boards automatically
+- **Automatic USB Detection** - Recognizes STM32 Nucleo and ESP32 boards automatically via USB VID/PID
 - **Multi-Device Support** - Manage multiple connected totems simultaneously
-- **Real-time Status** - Live connection monitoring and device health
-
-### 📁 File Manager & Editor
-- **Integrated File System** - Organize firmware, configs, and text files
-- **Built-in Editor** - Edit text and JSON config files directly in browser
-- **Persistent Storage** - Files saved to browser localStorage
-- **File Types Supported**:
-  - Binary firmware (`.bin`, `.hex`)
-  - Configuration files (`.json`, `.config`)
-  - Text files (`.txt`, `.md`)
-- **Search & Filter** - Quick file lookup by name
-- **Upload/Download** - Import from and export to local system
+- **Demo Mode** - Simulate hardware without a physical device connected
+- **Real-time Status** - Live connection monitoring with power, programming, and runtime state
 
 ### ⚡ Flash Tab
-- **One-Click Flashing** - Program your boards without command-line tools
-- **Firmware Selection** - Choose from your file library
-- **Progress Tracking** - Real-time flash status and verification
-- **Error Recovery** - Clear error messages and recovery guidance
+- **Drag & Drop Firmware** - Drop `.bin`, `.hex`, `.elf`, `.c`, `.cpp`, `.ino`, `.py` files directly
+- **Built-in Code Editor** - View and edit source files with line numbers, edit/view mode toggle, and unsaved-change tracking
+- **File Creation** - Create new files from scratch or load built-in examples (e.g. ESP32-S3 LED Blink)
+- **One-Click Flashing** - Flash pre-compiled binaries with real-time progress bar
+- **Activity Log** - Timestamped log of all flash and file operations
 
-### 📊 Monitor Tab
-- **Serial Terminal** - Bidirectional communication with hardware
-- **115200 Baud** - Standard serial communication
-- **Command Builder** - Pre-built commands for common operations:
-  - `hello` - Test connection
-  - `toggle-led` - Control onboard LED
-  - `pid <p> <i> <d>` - PID control parameters
-- **Live Console** - Real-time terminal output
-- **Character-by-Character Transmission** - 10ms delay prevents UART buffer overruns
-
-### ⚙️ Config Tab
-- **Visual Configuration** - GUI for totem settings
-- **JSON Config Support** - Load and save configuration files
-- **Parameter Validation** - Ensures valid settings before applying
-
-### 🐛 Debug Tab
-- **Hardware Debugging** - Monitor and debug connected devices
-- **Console Logging** - View system logs and debug output
+### 📟 Monitor Tab
+- **Block Sequencer** - Build reusable command sequences by stacking blocks:
+  - `CMD` — Send any serial command, with inline param fields for known commands
+  - `DELAY` — Wait N milliseconds between steps (prevents UART overruns in sequences)
+  - `WAIT FOR` — Pause until a specific string appears in serial output (e.g. `Ready>`) with configurable timeout
+- **Persistent Sequences** - Block stacks and sequence names saved to localStorage and restored on reload
+- **Sequential Execution** - Run the full stack in order with per-block status indicators (running / done / error) and a Stop button
+- **Serial Terminal** - Full bidirectional terminal with auto-scroll, command history (↑↓), and manual input
+- **Character-by-Character Transmission** - Configurable delay (default 10ms) prevents UART buffer overruns
+- **Baud Rate & Line Ending** - Configurable per session (115200 / 57600 / 9600, CR / LF / CRLF)
 
 ## 📋 Prerequisites
 
@@ -139,24 +122,26 @@ npm run electron:build
 MakeyDooey/
 ├── src/
 │   ├── components/
-│   │   ├── FileManager.tsx        # File organizer & editor
-│   │   ├── FileManager.css        # File manager styles
-│   │   ├── TotemPoleVisualizer.tsx
-│   │   └── TotemProgrammingIDE.tsx
+│   │   ├── TotemPoleVisualizer.tsx  # Device discovery, demo mode, pole config
+│   │   └── TotemProgrammingIDE.tsx  # Flash + Monitor IDE (block sequencer, serial terminal)
 │   ├── services/
-│   │   ├── usbService.ts          # USB/Serial communication
-│   │   ├── platform.ts            # Platform abstraction
-│   │   ├── WebPlatformService.ts  # PWA implementation
-│   │   └── ElectronPlatformService.ts
+│   │   ├── usbService.ts            # USB/Serial communication & VID/PID detection
+│   │   ├── virtualSerialSimulator.ts
+│   │   └── platform/
+│   │       ├── index.ts             # Platform factory (Web vs Electron)
+│   │       ├── WebPlatformService.ts
+│   │       ├── ElectronPlatformService.ts
+│   │       └── demoModeService.ts   # Simulated hardware for testing
 │   ├── types/
-│   │   └── totem.ts               # TypeScript interfaces
-│   ├── App.tsx                    # Main app component
-│   ├── App.css                    # Global styles
-│   └── main.tsx                   # Entry point
+│   │   ├── totem.ts                 # Device type definitions
+│   │   └── platform.ts             # Platform service interfaces
+│   ├── App.tsx                      # Root component
+│   ├── App.css
+│   └── main.tsx
 ├── public/
-│   ├── manifest.json              # PWA manifest
-│   └── service-worker.js          # Service worker
-├── electron/                      # Electron wrapper
+│   ├── manifest.json                # PWA manifest
+│   └── service-worker.js
+├── electron/                        # Electron desktop wrapper
 ├── package.json
 ├── vite.config.ts
 └── tsconfig.json
@@ -231,23 +216,35 @@ const CHAR_DELAY_MS = 10; // Prevents buffer overflow
 - Click "Flash to Board"
 - Wait for success notification
 
-#### 4. Test Connection
+#### 4. Monitor & Test Connection
 - Switch to "Monitor" tab
-- Terminal connects automatically
-- Type `hello` and press Enter
-- Should see response from board
-- Try `toggle-led` to control LED
+- Click "🔌 Connect" and select your serial port
+- Type `hello` in the manual input and press Enter — should see response
+- Try `toggle-led` to control the onboard LED
 
-#### 5. Advanced Testing
-**PID Control:**
+#### 5. Build a Command Sequence
+- In the block panel (left side of Monitor), click **+ Add Block**
+- Add a `CMD` block → type `hello`
+- Add a `DELAY` block → set 500ms
+- Add a `CMD` block → type `get_pid`
+- Click **▶ Run Sequence** — blocks execute in order with live status
+- The sequence is automatically saved and will be there next session
+
+**PID tuning example sequence:**
 ```
-pid 1.0 0.5 0.1
+CMD   set_pid 1.0 0.0 0.0 1
+DELAY 200ms
+CMD   get_pid
+CMD   status
 ```
 
-**Custom Commands:**
-- Type any command your firmware supports
-- 10ms character delay ensures reliability
-- View real-time responses
+**Boot/init sequence example:**
+```
+WAIT FOR   Ready>    (timeout 5000ms)
+CMD        hello
+DELAY      100ms
+CMD        status
+```
 
 ## 🔍 Troubleshooting
 
@@ -393,8 +390,9 @@ This project is part of a senior capstone project.
 - [ ] Git integration for firmware versions
 - [ ] OTA (Over-The-Air) updates
 - [ ] Multi-language support
-- [ ] Custom command macros
-- [ ] Waveform visualization in Debug tab
+- [ ] Named sequence presets (save/load multiple sequences)
+- [ ] Waveform / data visualization in Monitor
+- [ ] WCAG 2.2 full accessibility audit
 
 ## 📞 Support
 
