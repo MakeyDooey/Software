@@ -9,18 +9,17 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'robots.txt'],
       manifest: {
-        name: 'Totem Programming Studio',
-        short_name: 'Totem Studio',
+        name: 'MakeyDooey',
+        short_name: 'MakeyDooey',
         description: 'Program and monitor Totem embedded boards',
-        theme_color: '#1e1e1e',
-        background_color: '#1e1e1e',
+        theme_color: '#EB7923',
+        background_color: '#fdf6ee',
         display: 'standalone',
-        // Update these to match your repo name
-        scope: '/controller-app-web/', 
-        start_url: '/controller-app-web/',
+        scope: '/Software/',
+        start_url: '/Software/',
         icons: [
           {
-            src: 'vite.svg', // Remove the leading slash for relative paths
+            src: 'vite.svg',
             sizes: '192x192',
             type: 'image/svg+xml'
           },
@@ -37,6 +36,5 @@ export default defineConfig({
       }
     })
   ],
-  // Change './' to your specific repo name for GitHub Pages
-  base: '/controller-app-web/' 
+  base: '/Software/'
 });
