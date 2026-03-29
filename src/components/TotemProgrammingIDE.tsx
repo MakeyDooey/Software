@@ -1501,8 +1501,8 @@ void loop() {
                     style={{
                       ...styles.btnSecondary,
                       width: '100%',
-                      backgroundColor: '#1a3a1a',
-                      borderColor: '#2e7d32',
+                      backgroundColor: '#109810',
+                      borderColor: '#0e8514',
                       textAlign: 'left',
                       padding: '10px 12px'
                     }}
@@ -1752,7 +1752,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   header: {
     background: tok.cardBg,
     borderBottom: `1.5px solid ${tok.border}`,
-    padding: '12px 20px',
+    padding: '12px 320px 12px 20px',
     boxShadow: tok.shadow,
     transition: 'background 0.3s',
   },

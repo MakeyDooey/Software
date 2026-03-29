@@ -1,4 +1,5 @@
 // src/components/LandingPage.tsx
+// Theme toggle removed — TopBar in App.tsx handles it globally.
 
 import React, { useEffect, useState } from 'react';
 import { useTheme, T } from '../theme/ThemeContext';
@@ -9,15 +10,14 @@ interface LandingPageProps {
 }
 
 const LandingPage: React.FC<LandingPageProps> = ({ onEnter, hasVisited = false }) => {
-  const { dark, toggle } = useTheme();
+  const { dark } = useTheme();
   const tok = T(dark);
 
-  const [mounted, setMounted] = useState(false);
-  const [bootLines, setBootLines] = useState<string[]>([]);
-  const [bootDone, setBootDone] = useState(false);
-  const [btnHover, setBtnHover] = useState(false);
+  const [mounted,     setMounted]     = useState(false);
+  const [bootLines,   setBootLines]   = useState<string[]>([]);
+  const [bootDone,    setBootDone]    = useState(false);
+  const [btnHover,    setBtnHover]    = useState(false);
   const [resumeHover, setResumeHover] = useState(false);
-  const [themeHover, setThemeHover] = useState(false);
 
   const BOOT_SEQUENCE = [
     '> USB subsystem ready',
@@ -55,26 +55,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onEnter, hasVisited = false }
         <rect width="100%" height="100%" fill="url(#dp)" />
       </svg>
 
-      {/* Theme toggle — top right */}
-      <button
-        onClick={toggle}
-        onMouseEnter={() => setThemeHover(true)}
-        onMouseLeave={() => setThemeHover(false)}
-        title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-        style={{
-          position: 'fixed', top: '16px', right: '16px', zIndex: 100,
-          padding: '8px 12px', borderRadius: '10px', fontSize: '18px',
-          border: `1.5px solid ${tok.border}`,
-          background: themeHover ? tok.orangeFaint : tok.cardBg,
-          cursor: 'pointer',
-          backdropFilter: 'blur(10px)',
-          transition: 'background 0.15s',
-          boxShadow: tok.shadow,
-        }}
-      >
-        {dark ? '☀️' : '🌙'}
-      </button>
-
       {/* Card */}
       <div style={{
         ...s.card,
@@ -109,10 +89,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ onEnter, hasVisited = false }
         {/* Feature pills */}
         <div style={s.pillRow}>
           {[
-            { icon: '⚡', label: 'Flash Firmware', bg: tok.amberFaint, border: tok.amber, text: tok.amberText },
-            { icon: '📡', label: 'Serial Monitor', bg: tok.greenFaint,  border: tok.green,  text: tok.greenText },
+            { icon: '⚡', label: 'Flash Firmware',  bg: tok.amberFaint,  border: tok.amber,  text: tok.amberText  },
+            { icon: '📡', label: 'Serial Monitor',  bg: tok.greenFaint,  border: tok.green,  text: tok.greenText  },
             { icon: '🧱', label: 'Block Sequencer', bg: tok.purpleFaint, border: tok.purple, text: tok.purpleText },
-            { icon: '🔧', label: 'ESP32 & STM32',  bg: tok.blueFaint,  border: tok.blue,   text: tok.blueText },
+            { icon: '🔧', label: 'ESP32 & STM32',   bg: tok.blueFaint,   border: tok.blue,   text: tok.blueText   },
           ].map(({ icon, label, bg, border, text }) => (
             <span key={label} style={{
               ...s.pill,
@@ -241,35 +221,35 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: '26px', padding: '44px 48px 36px', maxWidth: '560px', width: '90%',
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '22px', zIndex: 1,
   },
-  logoRow: { display: 'flex', alignItems: 'center', gap: '18px' },
+  logoRow:     { display: 'flex', alignItems: 'center', gap: '18px' },
   logoBox: {
     borderRadius: '18px', padding: '10px',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: '0 2px 14px rgba(235,121,35,0.14)',
   },
-  wordmarkCol: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  wordmarkCol:  { display: 'flex', flexDirection: 'column', gap: '4px' },
   wordmarkName: { fontFamily: "'Nunito',sans-serif", fontWeight: 900, fontSize: '36px', letterSpacing: '-0.5px', lineHeight: 1 },
   wordmarkTag:  { fontFamily: "'DM Mono',monospace", fontSize: '11px', letterSpacing: '1.8px', textTransform: 'uppercase' as const },
-  headlineBlock: { textAlign: 'center' as const, display: 'flex', flexDirection: 'column' as const, gap: '10px', alignItems: 'center' },
-  headline: { fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: '28px', margin: 0, letterSpacing: '-0.3px' },
-  sub:      { fontSize: '14px', lineHeight: '1.65', margin: 0, maxWidth: '420px', textAlign: 'center' as const },
-  pillRow:  { display: 'flex', flexWrap: 'wrap' as const, gap: '8px', justifyContent: 'center' },
+  headlineBlock:{ textAlign: 'center' as const, display: 'flex', flexDirection: 'column' as const, gap: '10px', alignItems: 'center' },
+  headline:     { fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: '28px', margin: 0, letterSpacing: '-0.3px' },
+  sub:          { fontSize: '14px', lineHeight: '1.65', margin: 0, maxWidth: '420px', textAlign: 'center' as const },
+  pillRow:      { display: 'flex', flexWrap: 'wrap' as const, gap: '8px', justifyContent: 'center' },
   pill: {
     display: 'inline-flex', alignItems: 'center', gap: '6px',
     padding: '6px 14px', borderRadius: '20px', border: '1.5px solid',
     fontSize: '12px', fontWeight: 700, letterSpacing: '0.2px',
   },
-  terminal: { width: '100%', borderRadius: '14px', overflow: 'hidden' },
-  termBar:  { display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 14px' },
-  dot:      { width: '10px', height: '10px', borderRadius: '50%', display: 'block', flexShrink: 0 },
+  terminal:  { width: '100%', borderRadius: '14px', overflow: 'hidden' },
+  termBar:   { display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 14px' },
+  dot:       { width: '10px', height: '10px', borderRadius: '50%', display: 'block', flexShrink: 0 },
   termTitle: { marginLeft: '6px', fontFamily: "'DM Mono',monospace", fontSize: '11px', letterSpacing: '1px' },
   termBody: {
     padding: '14px 18px', minHeight: '108px',
     display: 'flex', flexDirection: 'column' as const, gap: '4px',
   },
-  termLine: { fontFamily: "'DM Mono',monospace", fontSize: '12px', animation: 'fadeInLine 0.22s ease both', letterSpacing: '0.1px' },
-  cursor:   { fontFamily: "'DM Mono',monospace", fontSize: '13px', animation: 'blink 1s step-end infinite', marginTop: '2px' },
-  ctaRow:   { display: 'flex', gap: '10px', width: '100%', justifyContent: 'center' },
+  termLine:   { fontFamily: "'DM Mono',monospace", fontSize: '12px', animation: 'fadeInLine 0.22s ease both', letterSpacing: '0.1px' },
+  cursor:     { fontFamily: "'DM Mono',monospace", fontSize: '13px', animation: 'blink 1s step-end infinite', marginTop: '2px' },
+  ctaRow:     { display: 'flex', gap: '10px', width: '100%', justifyContent: 'center' },
   cta: {
     padding: '14px 48px', border: 'none', borderRadius: '13px', color: '#fff',
     fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: '17px', letterSpacing: '0.2px',

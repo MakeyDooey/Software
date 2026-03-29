@@ -1,29 +1,48 @@
 // src/theme/ThemeContext.tsx
-// Central theme system for MakeyDooey light/dark mode
+// Central theme system for MakeyDooey light/dark mode.
+// setDark is now exposed in the context so ThemeSync (in App.tsx)
+// can restore the user's saved cloud preference on login.
 
 import React, { createContext, useContext, useState, useCallback } from 'react';
 
-// ─── Context ─────────────────────────────────────────────────────────────────
+// ─── Context ──────────────────────────────────────────────────────────────────
 
 interface ThemeContextValue {
   dark: boolean;
   toggle: () => void;
+  setDark: (value: boolean) => void;  // exposed for ThemeSync
 }
 
-const ThemeContext = createContext<ThemeContextValue>({ dark: false, toggle: () => {} });
+const ThemeContext = createContext<ThemeContextValue>({
+  dark: false,
+  toggle: () => {},
+  setDark: () => {},
+});
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [dark, setDark] = useState(() => {
+  const [dark, setDarkState] = useState(() => {
     try { return localStorage.getItem('md-theme') === 'dark'; } catch { return false; }
   });
+
   const toggle = useCallback(() => {
-    setDark(d => {
+    setDarkState(d => {
       const next = !d;
       try { localStorage.setItem('md-theme', next ? 'dark' : 'light'); } catch {}
       return next;
     });
   }, []);
-  return <ThemeContext.Provider value={{ dark, toggle }}>{children}</ThemeContext.Provider>;
+
+  // Exposed so ThemeSync can set it directly (e.g. restoring from Supabase)
+  const setDark = useCallback((value: boolean) => {
+    setDarkState(value);
+    try { localStorage.setItem('md-theme', value ? 'dark' : 'light'); } catch {}
+  }, []);
+
+  return (
+    <ThemeContext.Provider value={{ dark, toggle, setDark }}>
+      {children}
+    </ThemeContext.Provider>
+  );
 };
 
 export const useTheme = () => useContext(ThemeContext);
@@ -35,29 +54,29 @@ export interface Tokens {
   // Page / surfaces
   pageBg: string;
   cardBg: string;
-  cardBgAlt: string;       // slightly darker card
-  panelBg: string;         // sidebar / panel
+  cardBgAlt: string;
+  panelBg: string;
   panelHeaderBg: string;
   surfaceHover: string;
   inputBg: string;
 
   // Borders
-  border: string;          // standard
-  borderStrong: string;    // emphasis
-  borderSubtle: string;    // hairline
+  border: string;
+  borderStrong: string;
+  borderSubtle: string;
 
   // Text
   textPrimary: string;
   textSecondary: string;
   textMuted: string;
-  textOnOrange: string;    // always white
+  textOnOrange: string;
 
   // Brand orange
   orange: string;
   orangeHover: string;
-  orangeFaint: string;     // very light tint
-  orangeSubtle: string;    // border / pill bg
-  orangeText: string;      // text on light bg
+  orangeFaint: string;
+  orangeSubtle: string;
+  orangeText: string;
 
   // Status
   green: string;
@@ -104,22 +123,18 @@ export function T(dark: boolean): Tokens {
     panelHeaderBg:    'rgba(42,26,64,0.8)',
     surfaceHover:     'rgba(235,121,35,0.1)',
     inputBg:          'rgba(255,255,255,0.06)',
-
     border:           'rgba(235,121,35,0.22)',
     borderStrong:     'rgba(235,121,35,0.4)',
     borderSubtle:     'rgba(235,121,35,0.12)',
-
     textPrimary:      '#f5ede0',
     textSecondary:    '#c4a882',
     textMuted:        '#7a6458',
     textOnOrange:     '#fff',
-
     orange:           '#EB7923',
     orangeHover:      '#c85e0a',
     orangeFaint:      'rgba(235,121,35,0.12)',
     orangeSubtle:     'rgba(235,121,35,0.2)',
     orangeText:       '#f5ede0',
-
     green:            '#22c55e',
     greenFaint:       'rgba(34,197,94,0.12)',
     greenText:        '#bbf7d0',
@@ -135,24 +150,20 @@ export function T(dark: boolean): Tokens {
     purple:           '#a855f7',
     purpleFaint:      'rgba(168,85,247,0.12)',
     purpleText:       '#e9d5ff',
-
     termBg:           '#0d0818',
     termText:         '#a3e635',
     termInputBg:      'rgba(255,255,255,0.04)',
     termBorder:       'rgba(235,121,35,0.2)',
     termHeaderBg:     'rgba(255,255,255,0.04)',
-
     blobA:            'rgba(235,121,35,0.14)',
     blobB:            'rgba(140,80,255,0.12)',
     blobC:            'rgba(200,120,20,0.1)',
-
     scrollThumb:      'rgba(235,121,35,0.3)',
     backdropBlur:     'rgba(26,14,46,0.7)',
     shadow:           '0 4px 24px rgba(0,0,0,0.4)',
     shadowStrong:     '0 8px 40px rgba(0,0,0,0.6)',
   };
 
-  // Light
   return {
     pageBg:           '#fdf6ee',
     cardBg:           'rgba(255,255,255,0.87)',
@@ -161,22 +172,18 @@ export function T(dark: boolean): Tokens {
     panelHeaderBg:    'rgba(255,247,238,0.7)',
     surfaceHover:     '#fff7ee',
     inputBg:          '#fff',
-
     border:           'rgba(235,121,35,0.22)',
     borderStrong:     'rgba(235,121,35,0.4)',
     borderSubtle:     'rgba(235,121,35,0.12)',
-
     textPrimary:      '#1a0a30',
     textSecondary:    '#6b5444',
     textMuted:        '#9ca3af',
     textOnOrange:     '#fff',
-
     orange:           '#EB7923',
     orangeHover:      '#c85e0a',
     orangeFaint:      '#fff3e0',
     orangeSubtle:     'rgba(235,121,35,0.2)',
     orangeText:       '#92400e',
-
     green:            '#16a34a',
     greenFaint:       '#dcfce7',
     greenText:        '#14532d',
@@ -192,17 +199,14 @@ export function T(dark: boolean): Tokens {
     purple:           '#7c3aed',
     purpleFaint:      '#ede9fe',
     purpleText:       '#4c1d95',
-
     termBg:           '#1a0a30',
     termText:         '#a3e635',
     termInputBg:      'rgba(255,255,255,0.05)',
     termBorder:       'rgba(235,121,35,0.25)',
     termHeaderBg:     'rgba(255,255,255,0.06)',
-
     blobA:            'rgba(235,121,35,0.2)',
     blobB:            'rgba(180,130,255,0.18)',
     blobC:            'rgba(255,215,120,0.2)',
-
     scrollThumb:      'rgba(235,121,35,0.28)',
     backdropBlur:     'blur(18px)',
     shadow:           '0 8px 48px rgba(180,80,10,0.1)',
