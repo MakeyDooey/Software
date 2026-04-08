@@ -3,6 +3,7 @@
 //  - Totem pole layout saved to Supabase per user (restored on load)
 //  - Baud rate preference saved per user
 //  - Richer demo: shows user nickname welcome + per-user baud rate in status bar
+//  - onDemoModeChange callback so App.tsx can thread isDemoMode into TotemProgrammingIDE
 
 import React, { useState, useEffect, useCallback } from 'react';
 import type { TotemStatus, PowerState } from '../types/totem';
@@ -14,13 +15,14 @@ import { useUserSettings, type TotemPoleSnapshot } from '../hooks/useUserSetting
 
 interface TotemPoleVisualizerProps {
   onTotemDoubleClick: (totem: TotemStatus) => void;
+  onDemoModeChange?: (isDemoMode: boolean) => void;
 }
 
 // Supported baud rates
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 const DEFAULT_BAUD = 115200;
 
-export const TotemPoleVisualizer: React.FC<TotemPoleVisualizerProps> = ({ onTotemDoubleClick }) => {
+export const TotemPoleVisualizer: React.FC<TotemPoleVisualizerProps> = ({ onTotemDoubleClick, onDemoModeChange }) => {
   const { dark } = useTheme();
   const tok = T(dark);
   const { user } = useAuth();
@@ -122,6 +124,7 @@ export const TotemPoleVisualizer: React.FC<TotemPoleVisualizerProps> = ({ onTote
     const demo = demoModeService.startDemoMode();
     setConnectedTotems(demo);
     setIsDemoMode(true);
+    onDemoModeChange?.(true);
     demoModeService.subscribe((updated) => {
       setConnectedTotems(p => p.map(c => updated.find(u => u.id === c.id) || c));
       setTotemPole(p => p.map(c => updated.find(u => u.id === c.id) || c));
@@ -131,6 +134,7 @@ export const TotemPoleVisualizer: React.FC<TotemPoleVisualizerProps> = ({ onTote
   const stopDemoMode = () => {
     demoModeService.stopDemoMode();
     setConnectedTotems([]); setTotemPole([]); setIsDemoMode(false);
+    onDemoModeChange?.(false);
   };
 
   // ── Pole management ───────────────────────────────────────────────────────

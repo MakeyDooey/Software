@@ -1,5 +1,6 @@
-// src/services/demoModeService.ts
-// This simulates real hardware for demo purposes
+// src/services/platform/demoModeService.ts
+// Simulates real hardware for demo purposes
+// Includes Roxanne Motor Totem as a real-hardware-connectable entry
 
 import type { TotemStatus, SoftwareFault, HardwareFault } from '../../types/totem';
 
@@ -8,13 +9,9 @@ export class DemoModeService {
   private updateInterval: number | null = null;
   private listeners: ((totems: TotemStatus[]) => void)[] = [];
 
-  /**
-   * Initialize demo mode with mock totems
-   */
   startDemoMode(): TotemStatus[] {
     this.demoTotems = this.createMockTotems();
     
-    // Simulate dynamic updates every 2 seconds
     this.updateInterval = window.setInterval(() => {
       this.simulateRuntimeUpdates();
       this.notifyListeners();
@@ -23,9 +20,6 @@ export class DemoModeService {
     return this.demoTotems;
   }
 
-  /**
-   * Stop demo mode
-   */
   stopDemoMode(): void {
     if (this.updateInterval) {
       window.clearInterval(this.updateInterval);
@@ -34,9 +28,6 @@ export class DemoModeService {
     this.demoTotems = [];
   }
 
-  /**
-   * Subscribe to demo updates
-   */
   subscribe(callback: (totems: TotemStatus[]) => void): () => void {
     this.listeners.push(callback);
     return () => {
@@ -44,21 +35,14 @@ export class DemoModeService {
     };
   }
 
-  /**
-   * Get current demo totems
-   */
   getDemoTotems(): TotemStatus[] {
     return this.demoTotems;
   }
 
-  /**
-   * Simulate programming a totem
-   */
   async simulateProgramming(totemId: string): Promise<void> {
     const totem = this.demoTotems.find(t => t.id === totemId);
     if (!totem) return;
 
-    // Simulate programming steps
     totem.programmingState = 'programming';
     this.notifyListeners();
 
@@ -71,36 +55,24 @@ export class DemoModeService {
     this.notifyListeners();
   }
 
-  /**
-   * Simulate starting program execution
-   */
   simulateStart(totemId: string): void {
     const totem = this.demoTotems.find(t => t.id === totemId);
     if (!totem) return;
-
     totem.runtimeState = 'running';
     totem.uptime = 0;
     this.notifyListeners();
   }
 
-  /**
-   * Simulate stopping program execution
-   */
   simulateStop(totemId: string): void {
     const totem = this.demoTotems.find(t => t.id === totemId);
     if (!totem) return;
-
     totem.runtimeState = 'stopped';
     this.notifyListeners();
   }
 
-  /**
-   * Clear faults
-   */
   clearFaults(totemId: string): void {
     const totem = this.demoTotems.find(t => t.id === totemId);
     if (!totem) return;
-
     totem.softwareFault = 'none';
     totem.hardwareFault = 'none';
     totem.faultDetails = undefined;
@@ -129,13 +101,7 @@ export class DemoModeService {
         uptime: 3600,
         softwareFault: 'none',
         hardwareFault: 'none',
-        capabilities: {
-          hasADC: true,
-          hasPWM: true,
-          hasUART: true,
-          hasI2C: true,
-          gpioCount: 16
-        }
+        capabilities: { hasADC: true, hasPWM: true, hasUART: true, hasI2C: true, gpioCount: 16 }
       },
       {
         id: 'demo-temp-001',
@@ -155,13 +121,7 @@ export class DemoModeService {
         uptime: 7200,
         softwareFault: 'none',
         hardwareFault: 'none',
-        capabilities: {
-          hasADC: true,
-          hasPWM: false,
-          hasUART: false,
-          hasI2C: true,
-          gpioCount: 4
-        }
+        capabilities: { hasADC: true, hasPWM: false, hasUART: false, hasI2C: true, gpioCount: 4 }
       },
       {
         id: 'demo-pwm-001',
@@ -181,13 +141,7 @@ export class DemoModeService {
         uptime: 86400,
         softwareFault: 'none',
         hardwareFault: 'none',
-        capabilities: {
-          hasADC: true,
-          hasPWM: true,
-          hasUART: true,
-          hasI2C: true,
-          gpioCount: 8
-        }
+        capabilities: { hasADC: true, hasPWM: true, hasUART: true, hasI2C: true, gpioCount: 8 }
       },
       {
         id: 'demo-mppt-001',
@@ -207,13 +161,7 @@ export class DemoModeService {
         uptime: 172800,
         softwareFault: 'none',
         hardwareFault: 'none',
-        capabilities: {
-          hasADC: true,
-          hasPWM: true,
-          hasUART: true,
-          hasI2C: true,
-          gpioCount: 12
-        }
+        capabilities: { hasADC: true, hasPWM: true, hasUART: true, hasI2C: true, gpioCount: 12 }
       },
       {
         id: 'demo-unprogrammed',
@@ -230,38 +178,53 @@ export class DemoModeService {
         runtimeState: 'idle',
         softwareFault: 'none',
         hardwareFault: 'none',
-        capabilities: {
-          hasADC: false,
-          hasPWM: false,
-          hasUART: true,
-          hasI2C: true,
-          gpioCount: 2
-        }
-      }
+        capabilities: { hasADC: false, hasPWM: false, hasUART: true, hasI2C: true, gpioCount: 2 }
+      },
+      {
+        id: 'demo-roxanne-001',
+        position: 5,
+        type: 'actuator-pwm',
+        name: '🤖 Roxanne Motor Totem',
+        serialNumber: 'ESP32-ROX1',
+        connected: true,
+        busAddress: 0x60,
+        powerState: 'powered',
+        voltage: 3.30,
+        current: 480,
+        programmingState: 'programmed',
+        firmwareVersion: 'v1.0.0',
+        lastProgrammed: new Date(Date.now() - 1800000),
+        runtimeState: 'running',
+        uptime: 1800,
+        softwareFault: 'none',
+        hardwareFault: 'none',
+        capabilities: { hasADC: true, hasPWM: true, hasUART: true, hasI2C: false, gpioCount: 10 }
+      },
     ];
   }
 
   private simulateRuntimeUpdates(): void {
     this.demoTotems.forEach(totem => {
+      // Don't simulate faults or updates on the Roxanne totem —
+      // it represents real hardware so we leave its state alone
+      if (totem.id === 'demo-roxanne-001') return;
+
       if (totem.runtimeState === 'running') {
-        // Increment uptime
         if (totem.uptime !== undefined) {
           totem.uptime += 2;
         }
 
-        // Simulate voltage fluctuations
         if (totem.voltage !== undefined) {
           totem.voltage += (Math.random() - 0.5) * 0.1;
           totem.voltage = Math.max(0, Math.min(totem.voltage, 25));
         }
 
-        // Simulate current fluctuations
         if (totem.current !== undefined) {
           totem.current += (Math.random() - 0.5) * 10;
           totem.current = Math.max(0, totem.current);
         }
 
-        // Randomly simulate a fault (1% chance)
+        // 1% chance of simulated fault (fake totems only)
         if (Math.random() < 0.01) {
           const faultTypes = ['software', 'hardware'] as const;
           const faultType = faultTypes[Math.floor(Math.random() * 2)];

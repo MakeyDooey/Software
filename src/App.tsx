@@ -5,6 +5,7 @@ import { TotemPoleVisualizer } from './components/TotemPoleVisualizer';
 import TotemProgrammingIDE from './components/TotemProgrammingIDE';
 import LandingPage from './components/LandingPage';
 import { TopBar } from './components/TopBar';
+import { ResetPasswordPage } from './components/ResetPasswordPage';
 import { ThemeProvider, useTheme, T } from './theme/ThemeContext';
 import { useAuth } from './context/AuthContext';
 import { useUserSettings } from './hooks/useUserSettings';
@@ -47,15 +48,37 @@ function AppInner() {
   const [showLanding,      setShowLanding]      = useState(true);
   const [hasVisited,       setHasVisited]        = useState(false);
   const [programmingTotem, setProgrammingTotem] = useState<TotemStatus | null>(null);
+  const [isPasswordReset,  setIsPasswordReset]  = useState(false);
+  // Lifted from TotemPoleVisualizer so TotemProgrammingIDE can know about demo mode
+  const [isDemoMode,       setIsDemoMode]        = useState(false);
 
-  const handleEnter = () => { setHasVisited(true); setShowLanding(false); };
-  const handleBack  = () => setShowLanding(true);
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.includes('type=recovery') && hash.includes('access_token')) {
+      setIsPasswordReset(true);
+    }
+  }, []);
 
   useEffect(() => {
     const tok = T(dark);
     document.body.style.background  = tok.pageBg;
     document.body.style.colorScheme = dark ? 'dark' : 'light';
   }, [dark]);
+
+  const handleEnter = () => { setHasVisited(true); setShowLanding(false); };
+  const handleBack  = () => setShowLanding(true);
+
+  if (isPasswordReset) {
+    return (
+      <>
+        <ThemeSync />
+        <ResetPasswordPage onDone={() => {
+          setIsPasswordReset(false);
+          setShowLanding(true);
+        }} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -66,7 +89,10 @@ function AppInner() {
       ) : (
         <div style={{ width: '100%', height: '100vh', position: 'relative' }}>
           <NavBack onBack={handleBack} />
-          <TotemPoleVisualizer onTotemDoubleClick={(t) => setProgrammingTotem(t)} />
+          <TotemPoleVisualizer
+            onTotemDoubleClick={(t) => setProgrammingTotem(t)}
+            onDemoModeChange={setIsDemoMode}
+          />
           {programmingTotem && (
             <TotemProgrammingIDE
               totem={programmingTotem}
