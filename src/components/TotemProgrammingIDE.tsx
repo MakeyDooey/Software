@@ -700,6 +700,31 @@ void loop() {
     }
 
     setProgress(40);
+    
+    const contentType = response.headers.get('Content-Type') || '';
+    if (contentType.includes('application/octet-stream')) {
+      addLog('Compile complete. Received merged binary.');
+      const binBlob = await response.blob();
+      const data = new Uint8Array(await binBlob.arrayBuffer());
+      
+      const metadata = {
+        chip: 'esp32s3',
+        flash_mode: 'keep',
+        flash_size: 'keep',
+        flash_freq: 'keep',
+        flash_files: [{ offset: '0x0', file: 'firmware.bin' }]
+      };
+      
+      const segments: FlashSegment[] = [{
+        address: 0x0,
+        path: 'firmware.bin',
+        data
+      }];
+      
+      setProgress(60);
+      return { metadata, segments, zipBlob: binBlob };
+    }
+
     addLog('Compile complete. Parsing flash bundle...');
     const zipBlob = await response.blob();
     const zip = await JSZip.loadAsync(zipBlob);
