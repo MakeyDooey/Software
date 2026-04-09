@@ -6,6 +6,40 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { TotemStatus } from '../types/totem';
 import usbService from '../services/usbService';
 import { useTheme, T } from '../theme/ThemeContext';
+import JSZip from 'jszip';
+import { Terminal } from 'xterm';
+import 'xterm/css/xterm.css';
+import monocraftFontUrl from '../assets/fonts/Monocraft.ttf';
+
+interface FlashSegment {
+  address: number;
+  path: string;
+  data: Uint8Array;
+}
+
+interface CompiledBundle {
+  metadata: {
+    chip?: string;
+    flash_files: Array<{ offset: string; file: string }>;
+  };
+  segments: FlashSegment[];
+  zipBlob: Blob;
+}
+
+interface BrowserEspFlasher {
+  flashSegments: (segments: FlashSegment[], options: { chip: string; onProgress?: (percent: number, message?: string) => void }) => Promise<void>;
+}
+
+type FlashMode = 'direct' | 'cmsis-dap';
+
+interface BrowserCmsisDapFlasher {
+  flashSegments: (segments: FlashSegment[], options: { chip: string; onProgress?: (percent: number, message?: string) => void }) => Promise<void>;
+}
+
+interface FlashAdapterOptions {
+  chip: string;
+  onProgress?: (percent: number, message?: string) => void;
+}
 
 interface CommandBlock {
   id: string;
@@ -23,6 +57,8 @@ interface TotemProgrammingIDEProps {
   onProgramSuccess: (totemId: string) => void;
 }
 
+const TERMINAL_WELCOME = `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`;
+
 const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   totem,
   onClose,
@@ -38,6 +74,9 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const [isProgramming, setIsProgramming] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
+  const [backendUrl, setBackendUrl] = useState<string>(() => localStorage.getItem('makeydooey-backend-url') || 'http://127.0.0.1:8000');
+  const [sourcePath, setSourcePath] = useState<string>('main/main.c');
+  const [lastBundleBlob, setLastBundleBlob] = useState<Blob | null>(null);
 
   // File editor state
   const [fileContent, setFileContent] = useState<string>('');
@@ -49,11 +88,14 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   
   // Serial monitor state
-  const [termOutput, setTermOutput] = useState<string>('');
+  const [, setTermOutput] = useState<string>('');
   const [commandInput, setCommandInput] = useState('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const terminalRef = useRef<HTMLDivElement>(null);
+  const xtermRef = useRef<Terminal | null>(null);
+  const terminalInputRef = useRef('');
+  const terminalHistoryIndexRef = useRef(-1);
   
   // Command builder state
   const [selectedCommand, setSelectedCommand] = useState<string>('hello');
@@ -131,10 +173,68 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   };
   const boardInfo = getBoardInfo();
 
-  // Autoscroll terminal
   useEffect(() => {
-    if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-  }, [termOutput]);
+    let cancelled = false;
+
+    const loadMonocraft = async () => {
+      try {
+        const face = new FontFace('Monocraft', `url(${monocraftFontUrl}) format('truetype')`);
+        const loadedFace = await face.load();
+        if (!cancelled) {
+          document.fonts.add(loadedFace);
+          if (xtermRef.current) {
+            xtermRef.current.options.fontFamily = "'Monocraft', 'DM Mono', 'Consolas', monospace";
+          }
+        }
+      } catch {
+      }
+    };
+
+    loadMonocraft();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'monitor' || !terminalRef.current) return;
+
+    if (!xtermRef.current) {
+      const term = new Terminal({
+        convertEol: true,
+        disableStdin: false,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        fontFamily: "'Monocraft', 'DM Mono', 'Consolas', monospace",
+        fontSize: 13,
+        lineHeight: 1.45,
+        scrollback: 5000,
+        theme: {
+          background: tok.termBg,
+          foreground: tok.termText,
+          cursor: tok.termText,
+        },
+      });
+      term.open(terminalRef.current);
+      xtermRef.current = term;
+
+      if (termOutputRef.current.length > 0) {
+        term.write(termOutputRef.current.replace(/\r?\n/g, '\r\n'));
+      } else {
+        term.write(TERMINAL_WELCOME.replace(/\r?\n/g, '\r\n'));
+        termOutputRef.current = TERMINAL_WELCOME;
+        setTermOutput(TERMINAL_WELCOME);
+        term.write('> ');
+      }
+    }
+
+    xtermRef.current.options.theme = {
+      background: tok.termBg,
+      foreground: tok.termText,
+      cursor: tok.termText,
+    };
+  }, [activeTab, tok.termBg, tok.termText]);
 
   useEffect(() => {
     const cmdDef = COMMANDS[selectedCommand];
@@ -145,7 +245,13 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     }
   }, [selectedCommand]);
 
-  useEffect(() => { return () => { disconnect(); }; }, []);
+  useEffect(() => {
+    return () => {
+      xtermRef.current?.dispose();
+      xtermRef.current = null;
+      disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -158,11 +264,99 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
   useEffect(() => { localStorage.setItem('makeydooey-blocks', JSON.stringify(blocks)); }, [blocks]);
   useEffect(() => { localStorage.setItem('makeydooey-sequence-name', sequenceName); }, [sequenceName]);
+  useEffect(() => { localStorage.setItem('makeydooey-backend-url', backendUrl.trim()); }, [backendUrl]);
 
   const appendToTerminal = (text: string) => {
     termOutputRef.current += text;
     setTermOutput(prev => prev + text);
+    xtermRef.current?.write(text.replace(/\r?\n/g, '\r\n'));
   };
+
+  const overwriteTerminalInput = (nextInput: string) => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    if (terminalInputRef.current.length > 0) {
+      term.write('\b \b'.repeat(terminalInputRef.current.length));
+    }
+
+    terminalInputRef.current = nextInput;
+    if (nextInput.length > 0) {
+      term.write(nextInput);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'monitor' || !xtermRef.current) return;
+
+    const term = xtermRef.current;
+    const terminalInputSubscription = term.onData(async (data: string) => {
+      if (data === '\u001b[A') {
+        if (commandHistory.length === 0) return;
+        const nextIndex = terminalHistoryIndexRef.current < commandHistory.length - 1
+          ? terminalHistoryIndexRef.current + 1
+          : terminalHistoryIndexRef.current;
+        terminalHistoryIndexRef.current = nextIndex;
+        const cmd = commandHistory[commandHistory.length - 1 - nextIndex] ?? '';
+        overwriteTerminalInput(cmd);
+        return;
+      }
+
+      if (data === '\u001b[B') {
+        if (commandHistory.length === 0) return;
+        if (terminalHistoryIndexRef.current > 0) {
+          const nextIndex = terminalHistoryIndexRef.current - 1;
+          terminalHistoryIndexRef.current = nextIndex;
+          const cmd = commandHistory[commandHistory.length - 1 - nextIndex] ?? '';
+          overwriteTerminalInput(cmd);
+        } else {
+          terminalHistoryIndexRef.current = -1;
+          overwriteTerminalInput('');
+        }
+        return;
+      }
+
+      if (data === '\u007f') {
+        if (terminalInputRef.current.length > 0) {
+          terminalInputRef.current = terminalInputRef.current.slice(0, -1);
+          term.write('\b \b');
+        }
+        return;
+      }
+
+      if (data === '\u0003') {
+        term.write('^C\r\n> ');
+        terminalInputRef.current = '';
+        terminalHistoryIndexRef.current = -1;
+        return;
+      }
+
+      if (data === '\r') {
+        const command = terminalInputRef.current.trim();
+        term.write('\r\n');
+        terminalInputRef.current = '';
+        terminalHistoryIndexRef.current = -1;
+
+        if (!command) {
+          term.write('> ');
+          return;
+        }
+
+        await sendCommand(command, { echoCommand: false, clearManualInput: false });
+        term.write('> ');
+        return;
+      }
+
+      if (data >= ' ' && data !== '\u007f') {
+        terminalInputRef.current += data;
+        term.write(data);
+      }
+    });
+
+    return () => {
+      terminalInputSubscription.dispose();
+    };
+  }, [activeTab, commandHistory]);
 
   // =====================================================
   // BLOCK SEQUENCER
@@ -304,6 +498,7 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
       setIsConnected(true);
       appendToTerminal('[✓ Connected!]\n\n');
+      xtermRef.current?.focus();
       readLoop(reader);
 
     } catch (e: any) {
@@ -331,35 +526,33 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
         if (value) {
           setRxBytes(prev => prev + value.length);
 
-          // Only show non-JSON lines in terminal to keep it clean,
-          // but still buffer for JSON parsing
           buffer += value;
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
 
           for (const line of lines) {
-            const trimmed = line.trim();
+            const normalizedLine = line.replace(/\r$/, '');
+            appendToTerminal(normalizedLine + '\n');
+
+            const trimmed = normalizedLine.trim();
             if (!trimmed) continue;
 
-            // Try to parse as Benji's JSON telemetry
             try {
               const d = JSON.parse(trimmed);
-              // Update telemetry panel
               setTelemetry(prev => ({
                 v1:  d.v1  !== undefined ? d.v1  : prev?.v1  ?? 0,
                 v2:  d.v2  !== undefined ? d.v2  : prev?.v2  ?? 0,
                 en:  d.en  !== undefined ? d.en  : prev?.en  ?? 0,
                 sg0: d.sg0 !== undefined ? d.sg0 : prev?.sg0 ?? 0,
               }));
-              // Show compact telemetry in terminal
-              appendToTerminal(`[TEL] v1:${d.v1?.toFixed(1)} v2:${d.v2?.toFixed(1)} en:${d.en} sg0:${d.sg0}\n`);
-              if (d.msg) appendToTerminal(`[MSG] ${d.msg}\n`);
             } catch {
-              // Not JSON — show as-is
-              appendToTerminal(trimmed + '\n');
             }
           }
         }
+      }
+
+      if (buffer.length > 0) {
+        appendToTerminal(buffer);
       }
     } catch (error: any) {
       if (!error.message?.includes('cancel')) {
@@ -418,14 +611,22 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     }
   };
 
-  const sendCommand = async (command: string) => {
+  const sendCommand = async (
+    command: string,
+    options: { echoCommand?: boolean; clearManualInput?: boolean } = {}
+  ) => {
+    const { echoCommand = true, clearManualInput = true } = options;
     if (!command.trim()) return;
-    if (!isConnected) { appendToTerminal('[Not connected - click Connect first]\n'); return; }
+    if (!isConnected) { appendToTerminal('(not connected)\n'); return; }
     setCommandHistory(prev => [...prev, command]);
     setHistoryIndex(-1);
-    appendToTerminal(`> ${command}\n`);
+    if (echoCommand) {
+      appendToTerminal(`> ${command}\n`);
+    }
     await sendData(command);
-    setCommandInput('');
+    if (clearManualInput) {
+      setCommandInput('');
+    }
   };
 
   const sendBuilderCommand = async () => {
@@ -476,6 +677,9 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
   const processSelectedFile = async (file: File) => {
     setSelectedFile(file);
+    if (!sourcePath || sourcePath === 'main/main.c') {
+      setSourcePath(`main/${file.name}`);
+    }
     addLog(`Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
     const textExtensions = ['.c', '.cpp', '.h', '.hpp', '.ino', '.txt', '.json', '.py', '.s', '.asm'];
     const isTextFile = textExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
@@ -603,32 +807,214 @@ void loop() {
     const blob = new Blob([ESP32_LED_EXAMPLE], { type: 'text/plain' });
     const file = new File([blob], fileName, { type: 'text/plain' });
     setSelectedFile(file); setFileContent(ESP32_LED_EXAMPLE); setEditedContent(ESP32_LED_EXAMPLE);
+    setSourcePath('main/main.c');
     setIsEditorOpen(true); setEditorMode('view'); setHasUnsavedChanges(false);
     addLog(`Loaded example: ${fileName}`);
   };
 
-  const handleFlashFirmware = async () => {
+  const downloadBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const compileSourceViaBackend = async (): Promise<CompiledBundle> => {
+    if (!selectedFile) throw new Error('Please select a source file first');
+    const cleanUrl = backendUrl.trim().replace(/\/+$/, '');
+    if (!cleanUrl) throw new Error('Backend URL is required');
+
+    setProgress(10);
+    addLog(`Uploading ${selectedFile.name} to backend...`);
+
+    const formData = new FormData();
+    const compilePath = sourcePath.trim() || `main/${selectedFile.name}`;
+    formData.append('files', selectedFile);
+    formData.append('paths', compilePath);
+
+    const response = await fetch(`${cleanUrl}/compile`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Compile failed (${response.status}): ${detail}`);
+    }
+
+    setProgress(40);
+    addLog('Compile complete. Parsing flash bundle...');
+    const zipBlob = await response.blob();
+    const zip = await JSZip.loadAsync(zipBlob);
+
+    const metadataFile = zip.file('metadata.json');
+    if (!metadataFile) throw new Error('metadata.json missing in bundle');
+    const metadata = JSON.parse(await metadataFile.async('string')) as CompiledBundle['metadata'];
+
+    if (!Array.isArray(metadata.flash_files) || metadata.flash_files.length === 0) {
+      throw new Error('No flash files found in metadata');
+    }
+
+    const segments: FlashSegment[] = [];
+    for (const entry of metadata.flash_files) {
+      const binary = zip.file(entry.file);
+      if (!binary) throw new Error(`Bundle missing artifact: ${entry.file}`);
+      const data = await binary.async('uint8array');
+      segments.push({
+        address: Number.parseInt(entry.offset, 16),
+        path: entry.file,
+        data,
+      });
+    }
+
+    setProgress(60);
+    return { metadata, segments, zipBlob };
+  };
+
+  const flashWithBuiltInEsptool = async (segments: FlashSegment[], options: FlashAdapterOptions) => {
+    if (!(navigator as any).serial?.requestPort) {
+      throw new Error('Web Serial is not available in this browser. Use Chrome or Edge.');
+    }
+
+    const { ESPLoader, Transport } = await import('esptool-js');
+    const terminal = {
+      clean: () => {},
+      writeLine: (line: string) => { if (line) addLog(`[esptool] ${line}`); },
+      write: (line: string) => { if (line) addLog(`[esptool] ${line}`); },
+    };
+
+    options.onProgress?.(62, 'Requesting serial port...');
+    const port = await (navigator as any).serial.requestPort();
+    const transport = new (Transport as any)(port);
+    const baudrate = 460800;
+    const loader = new (ESPLoader as any)({ transport, baudrate, terminal });
+
+    options.onProgress?.(66, `Connecting to ${options.chip} bootloader...`);
+    await loader.main();
+
+    const totalBytes = segments.reduce((sum, seg) => sum + seg.data.length, 0);
+    let writtenBytes = 0;
+
+    const reportProgress = (fileIndex: number, bytesWrittenInFile: number, bytesTotalInFile: number) => {
+      const completedBefore = segments.slice(0, fileIndex).reduce((sum, seg) => sum + seg.data.length, 0);
+      writtenBytes = completedBefore + Math.min(bytesWrittenInFile, bytesTotalInFile);
+      const percent = 66 + Math.round((writtenBytes / Math.max(totalBytes, 1)) * 34);
+      options.onProgress?.(Math.max(66, Math.min(100, percent)), `Flashing segment ${fileIndex + 1}/${segments.length}...`);
+    };
+
+    const fileArray = segments.map(seg => ({ data: seg.data, address: seg.address }));
+    const flashOptions = {
+      fileArray,
+      flashSize: 'keep',
+      flashMode: 'keep',
+      flashFreq: 'keep',
+      eraseAll: false,
+      compress: true,
+      reportProgress,
+    };
+
+    const chip = (loader as any).chip;
+    if (chip?.writeFlash) {
+      await chip.writeFlash(flashOptions);
+    } else if ((loader as any).writeFlash) {
+      await (loader as any).writeFlash(flashOptions);
+    } else {
+      throw new Error('esptool-js loaded but writeFlash API was not found.');
+    }
+
+    if ((transport as any).disconnect) {
+      await (transport as any).disconnect();
+    }
+  };
+
+  const getDirectFlasherAdapter = (): BrowserEspFlasher | undefined => {
+    const modern = (window as any).__makeydooeyEsptoolWebUsbFlasher as BrowserEspFlasher | undefined;
+    if (modern?.flashSegments) return modern;
+    const legacy = (window as any).__makeydooeyEspFlasher as BrowserEspFlasher | undefined;
+    if (legacy?.flashSegments) return legacy;
+    return undefined;
+  };
+
+  const getCmsisDapFlasherAdapter = (): BrowserCmsisDapFlasher | undefined => {
+    const candidate = (window as any).__makeydooeyCmsisDapFlasher as BrowserCmsisDapFlasher | undefined;
+    if (candidate?.flashSegments) return candidate;
+    return undefined;
+  };
+
+  const flashWithAdapter = async (bundle: CompiledBundle, mode: FlashMode) => {
+    if (mode === 'direct') {
+      try {
+        await flashWithBuiltInEsptool(bundle.segments, {
+          chip: bundle.metadata.chip || 'esp32s3',
+          onProgress: (percent, message) => {
+            setProgress(Math.max(60, Math.min(100, Math.round(percent))));
+            if (message) addLog(message);
+          },
+        });
+        return;
+      } catch (error: any) {
+        addLog(`Built-in esptool direct flash unavailable: ${error?.message || String(error)}`);
+      }
+    }
+
+    const adapter = mode === 'direct' ? getDirectFlasherAdapter() : getCmsisDapFlasherAdapter();
+    if (!adapter?.flashSegments) {
+      addLog(`No ${mode === 'direct' ? 'esptool/webusb' : 'CMSIS-DAP'} adapter found. Downloading flash bundle instead.`);
+      downloadBlob(bundle.zipBlob, 'esp32s3-flash-bundle.zip');
+      if (mode === 'direct') {
+        throw new Error('Direct flash unavailable. Install esptool-js dependencies and/or define window.__makeydooeyEsptoolWebUsbFlasher.flashSegments(...) (or legacy window.__makeydooeyEspFlasher.flashSegments(...)).');
+      }
+      throw new Error('CMSIS-DAP adapter unavailable. Define window.__makeydooeyCmsisDapFlasher.flashSegments(...) to enable bridge flashing.');
+    }
+
+    await adapter.flashSegments(bundle.segments, {
+      chip: bundle.metadata.chip || 'esp32s3',
+      onProgress: (percent, message) => {
+        setProgress(Math.max(60, Math.min(100, Math.round(percent))));
+        if (message) addLog(message);
+      },
+    });
+  };
+
+  const handleFlashFirmware = async (mode: FlashMode) => {
     if (!selectedFile) { alert('Please select a firmware file first'); return; }
     const fileName = selectedFile.name.toLowerCase();
     const isSourceFile = fileName.endsWith('.ino') || fileName.endsWith('.c') || fileName.endsWith('.cpp');
-    if (isSourceFile) {
-      addLog(`Source file — needs Arduino IDE to compile`);
-      if (confirm(`Download "${selectedFile.name}" to flash via Arduino IDE?`)) { handleDownloadFile(); }
-      return;
-    }
+    const modeLabel = mode === 'direct' ? 'Direct (esptool/webusb)' : 'CMSIS-DAP bridge';
     setIsProgramming(true); setProgress(0);
-    addLog(`Flashing: ${selectedFile.name}`);
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      setProgress(i);
-      if (i === 0) addLog('Connecting to bootloader...');
-      if (i === 20) addLog('Erasing flash...');
-      if (i === 40) addLog('Writing firmware...');
-      if (i === 80) addLog('Verifying...');
+    try {
+      if (isSourceFile) {
+        addLog(`Compiling source via backend for ${modeLabel}: ${selectedFile.name}`);
+        const bundle = await compileSourceViaBackend();
+        setLastBundleBlob(bundle.zipBlob);
+        addLog(`Bundle contains ${bundle.segments.length} flash segment(s)`);
+        addLog(`Starting ${modeLabel} flash adapter...`);
+        await flashWithAdapter(bundle, mode);
+      } else {
+        addLog(`Binary selected (${selectedFile.name}) - using legacy simulated flash flow for ${modeLabel}`);
+        for (let i = 0; i <= 100; i += 10) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+          setProgress(i);
+          if (i === 0) addLog('Connecting to bootloader...');
+          if (i === 20) addLog('Erasing flash...');
+          if (i === 40) addLog('Writing firmware...');
+          if (i === 80) addLog('Verifying...');
+        }
+      }
+      setProgress(100);
+      addLog('✓ Flash complete!');
+      onProgramSuccess(totem.id);
+      if (confirm('Flash complete! Go to Monitor tab?')) setActiveTab('monitor');
+    } catch (error: any) {
+      addLog(`Flash failed: ${error?.message || String(error)}`);
+      alert(`Flash failed: ${error?.message || String(error)}`);
+    } finally {
+      setIsProgramming(false);
     }
-    setIsProgramming(false); addLog('✓ Flash complete!');
-    onProgramSuccess(totem.id);
-    if (confirm('Flash complete! Go to Monitor tab?')) setActiveTab('monitor');
   };
 
   const handleClose = async () => { await disconnect(); onClose(); };
@@ -800,7 +1186,16 @@ void loop() {
                 <button style={{ ...styles.btnConnect, backgroundColor: isConnected ? '#c62828' : '#2e7d32' }} onClick={connect}>
                   {isConnected ? '❌ Disconnect' : '🔌 Connect'}
                 </button>
-                <button style={styles.btnSmall} onClick={() => { setTermOutput(''); termOutputRef.current = ''; }}>🗑️ Clear</button>
+                <button
+                  style={styles.btnSmall}
+                  onClick={() => {
+                    setTermOutput('');
+                    termOutputRef.current = '';
+                    xtermRef.current?.clear();
+                  }}
+                >
+                  🗑️ Clear
+                </button>
                 <div style={styles.connectionStatus}>
                   <span style={{ color: isConnected ? '#4caf50' : '#888', fontSize: '20px', lineHeight: '1' }}>●</span>
                   <span style={{ color: isConnected ? '#4caf50' : '#888' }}>{isConnected ? 'Connected' : 'Disconnected'}</span>
@@ -813,19 +1208,8 @@ void loop() {
               )}
 
               {/* Terminal Output */}
-              <div ref={terminalRef} style={styles.terminal}>
-                {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
-              </div>
+              <div ref={terminalRef} style={styles.terminal} />
 
-              {/* Manual Input */}
-              <div style={styles.inputRow}>
-                <input type="text" style={styles.manualInput}
-                  placeholder={isConnected ? "Type command and press Enter..." : "Connect first..."}
-                  value={commandInput} onChange={e => setCommandInput(e.target.value)}
-                  onKeyDown={handleKeyDown} disabled={!isConnected}
-                />
-                <button style={styles.btnInputSend} onClick={() => sendCommand(commandInput)} disabled={!isConnected}>Send</button>
-              </div>
             </div>
           </div>
         )}
@@ -864,8 +1248,35 @@ void loop() {
 
               <div style={styles.flashSection}>
                 <h4 style={styles.flashSectionTitle}>⚡ Flash Firmware</h4>
-                <button style={{ ...styles.btnFlash, opacity: (!selectedFile || isProgramming) ? 0.5 : 1 }} onClick={handleFlashFirmware} disabled={!selectedFile || isProgramming}>
-                  {isProgramming ? '⏳ Programming...' : '🚀 Flash to Device'}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
+                  <label style={{ color: '#666', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.7px' }}>Backend URL</label>
+                  <input
+                    value={backendUrl}
+                    onChange={e => setBackendUrl(e.target.value)}
+                    placeholder="https://xxxxx.trycloudflare.com"
+                    style={styles.blockInput}
+                  />
+                  <label style={{ color: '#666', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.7px' }}>Source Path in Project</label>
+                  <input
+                    value={sourcePath}
+                    onChange={e => setSourcePath(e.target.value)}
+                    placeholder="main/main.c"
+                    style={styles.blockInput}
+                  />
+                </div>
+                <button
+                  style={{ ...styles.btnFlash, opacity: (!selectedFile || isProgramming) ? 0.5 : 1 }}
+                  onClick={() => handleFlashFirmware('direct')}
+                  disabled={!selectedFile || isProgramming}
+                >
+                  {isProgramming ? '⏳ Programming...' : '🚀 Compile + Flash (Direct)'}
+                </button>
+                <button
+                  style={{ ...styles.btnSecondary, width: '100%', opacity: (!selectedFile || isProgramming) ? 0.5 : 1 }}
+                  onClick={() => handleFlashFirmware('cmsis-dap')}
+                  disabled={!selectedFile || isProgramming}
+                >
+                  {isProgramming ? '⏳ Programming...' : '🧰 Compile + Flash (CMSIS-DAP)'}
                 </button>
                 {isProgramming && (
                   <div style={styles.progressBar}>
@@ -873,7 +1284,17 @@ void loop() {
                     <div style={styles.progressText}>{progress}%</div>
                   </div>
                 )}
-                <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>Note: For .ino files, download and flash via Arduino IDE.</div>
+                <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
+                  Source files are compiled remotely, then flashed from the returned bundle using the selected transport.
+                </div>
+                {lastBundleBlob && (
+                  <button
+                    style={{ ...styles.btnSecondary, width: '100%', marginTop: '10px' }}
+                    onClick={() => downloadBlob(lastBundleBlob, 'esp32s3-flash-bundle.zip')}
+                  >
+                    📦 Download Last Bundle
+                  </button>
+                )}
               </div>
 
               <div style={styles.flashSection}>
@@ -1169,7 +1590,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   baudSelect: { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.08)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '13px' },
   btnSmall: { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.07)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', cursor: 'pointer' },
   connectionStatus: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
-  terminal: { flex: 1, padding: '15px', whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '13px', color: tok.termText, fontFamily: "'DM Mono', 'Monaco', 'Consolas', monospace", lineHeight: '1.5', background: 'transparent' },
+  terminal: { flex: 1, padding: '8px', overflow: 'hidden', background: 'transparent' },
   inputRow: { display: 'flex', borderTop: `1px solid ${tok.border}` },
   manualInput: { flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg, border: 'none', color: tok.termText, fontSize: '14px', fontFamily: "'DM Mono', 'Monaco', monospace", outline: 'none' },
   btnInputSend: { padding: '12px 20px', backgroundColor: tok.orange, border: 'none', borderLeft: `1px solid ${tok.border}`, color: tok.textOnOrange, fontSize: '13px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
