@@ -17,6 +17,9 @@ interface FlashSegment {
 interface CompiledBundle {
   metadata: {
     chip?: string;
+    flash_mode?: string;
+    flash_size?: string;
+    flash_freq?: string;
     flash_files: Array<{ offset: string; file: string }>;
   };
   segments: FlashSegment[];
@@ -35,6 +38,9 @@ interface BrowserCmsisDapFlasher {
 
 interface FlashAdapterOptions {
   chip: string;
+  flashMode?: string;
+  flashSize?: string;
+  flashFreq?: string;
   onProgress?: (percent: number, message?: string) => void;
 }
 
@@ -659,6 +665,14 @@ void loop() {
     URL.revokeObjectURL(url);
   };
 
+  const normalizeCompilePath = (candidatePath: string, selectedName: string): string => {
+    const trimmed = candidatePath.trim();
+    const chosen = trimmed || `main/${selectedName}`;
+    const lower = chosen.toLowerCase();
+    if (lower.endsWith('.ino')) return chosen.slice(0, -4) + '.cpp';
+    return chosen;
+  };
+
   const compileSourceViaBackend = async (): Promise<CompiledBundle> => {
     if (!selectedFile) throw new Error('Please select a source file first');
     const cleanUrl = backendUrl.trim().replace(/\/+$/, '');
@@ -668,7 +682,10 @@ void loop() {
     addLog(`Uploading ${selectedFile.name} to backend...`);
 
     const formData = new FormData();
-    const compilePath = sourcePath.trim() || `main/${selectedFile.name}`;
+    const compilePath = normalizeCompilePath(sourcePath, selectedFile.name);
+    if (compilePath !== (sourcePath.trim() || `main/${selectedFile.name}`)) {
+      addLog(`Adjusted compile path for IDF compatibility: ${compilePath}`);
+    }
     formData.append('files', selectedFile);
     formData.append('paths', compilePath);
 
@@ -700,8 +717,12 @@ void loop() {
       const binary = zip.file(entry.file);
       if (!binary) throw new Error(`Bundle missing artifact: ${entry.file}`);
       const data = await binary.async('uint8array');
+      const address = Number.parseInt(entry.offset, 16);
+      if (!Number.isFinite(address)) {
+        throw new Error(`Invalid flash address in metadata: ${entry.offset}`);
+      }
       segments.push({
-        address: Number.parseInt(entry.offset, 16),
+        address,
         path: entry.file,
         data,
       });
@@ -712,6 +733,10 @@ void loop() {
   };
 
   const flashWithBuiltInEsptool = async (segments: FlashSegment[], options: FlashAdapterOptions) => {
+    if (!(window as any).isSecureContext) {
+      throw new Error('Web Serial/WebUSB flashing requires HTTPS (or localhost).');
+    }
+
     if (!(navigator as any).serial?.requestPort) {
       throw new Error('Web Serial is not available in this browser. Use Chrome or Edge.');
     }
@@ -726,11 +751,12 @@ void loop() {
     options.onProgress?.(62, 'Requesting serial port...');
     const port = await (navigator as any).serial.requestPort();
     const transport = new (Transport as any)(port);
-    const baudrate = 460800;
+    const baudrate = 115200;
     const loader = new (ESPLoader as any)({ transport, baudrate, terminal });
 
-    options.onProgress?.(66, `Connecting to ${options.chip} bootloader...`);
-    await loader.main();
+    try {
+      options.onProgress?.(66, `Connecting to ${options.chip} bootloader...`);
+      await loader.main();
 
     const totalBytes = segments.reduce((sum, seg) => sum + seg.data.length, 0);
     let writtenBytes = 0;
@@ -742,28 +768,29 @@ void loop() {
       options.onProgress?.(Math.max(66, Math.min(100, percent)), `Flashing segment ${fileIndex + 1}/${segments.length}...`);
     };
 
-    const fileArray = segments.map(seg => ({ data: seg.data, address: seg.address }));
-    const flashOptions = {
-      fileArray,
-      flashSize: 'keep',
-      flashMode: 'keep',
-      flashFreq: 'keep',
-      eraseAll: false,
-      compress: true,
-      reportProgress,
-    };
+      const fileArray = segments.map(seg => ({ data: seg.data, address: seg.address }));
+      const flashOptions = {
+        fileArray,
+        flashSize: options.flashSize || 'keep',
+        flashMode: options.flashMode || 'keep',
+        flashFreq: options.flashFreq || 'keep',
+        eraseAll: false,
+        compress: true,
+        reportProgress,
+      };
 
-    const chip = (loader as any).chip;
-    if (chip?.writeFlash) {
-      await chip.writeFlash(flashOptions);
-    } else if ((loader as any).writeFlash) {
-      await (loader as any).writeFlash(flashOptions);
-    } else {
-      throw new Error('esptool-js loaded but writeFlash API was not found.');
-    }
-
-    if ((transport as any).disconnect) {
-      await (transport as any).disconnect();
+      const chip = (loader as any).chip;
+      if (chip?.writeFlash) {
+        await chip.writeFlash(flashOptions);
+      } else if ((loader as any).writeFlash) {
+        await (loader as any).writeFlash(flashOptions);
+      } else {
+        throw new Error('esptool-js loaded but writeFlash API was not found.');
+      }
+    } finally {
+      if ((transport as any).disconnect) {
+        await (transport as any).disconnect();
+      }
     }
   };
 
@@ -786,6 +813,9 @@ void loop() {
       try {
         await flashWithBuiltInEsptool(bundle.segments, {
           chip: bundle.metadata.chip || 'esp32s3',
+          flashMode: bundle.metadata.flash_mode,
+          flashSize: bundle.metadata.flash_size,
+          flashFreq: bundle.metadata.flash_freq,
           onProgress: (percent, message) => {
             setProgress(Math.max(60, Math.min(100, Math.round(percent))));
             if (message) addLog(message);
@@ -793,6 +823,9 @@ void loop() {
         });
         return;
       } catch (error: any) {
+        if (error?.name === 'NotFoundError') {
+          throw new Error('No serial port selected. Flash canceled.');
+        }
         addLog(`Built-in esptool direct flash unavailable: ${error?.message || String(error)}`);
       }
     }
@@ -831,15 +864,7 @@ void loop() {
         addLog(`Starting ${modeLabel} flash adapter...`);
         await flashWithAdapter(bundle, mode);
       } else {
-        addLog(`Binary selected (${selectedFile.name}) - using legacy simulated flash flow for ${modeLabel}`);
-        for (let i = 0; i <= 100; i += 10) {
-          await new Promise(resolve => setTimeout(resolve, 300));
-          setProgress(i);
-          if (i === 0) addLog('Connecting to bootloader...');
-          if (i === 20) addLog('Erasing flash...');
-          if (i === 40) addLog('Writing firmware...');
-          if (i === 80) addLog('Verifying...');
-        }
+        throw new Error(`Unsupported file type for real flashing: ${selectedFile.name}. Upload source (.c/.cpp/.ino) so backend can compile and return a valid flash bundle.`);
       }
       setProgress(100);
       addLog('✓ Flash complete!');
