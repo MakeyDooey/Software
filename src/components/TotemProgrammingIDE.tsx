@@ -7,9 +7,6 @@ import type { TotemStatus } from '../types/totem';
 import usbService from '../services/usbService';
 import { useTheme, T } from '../theme/ThemeContext';
 import JSZip from 'jszip';
-import { Terminal } from 'xterm';
-import 'xterm/css/xterm.css';
-import monocraftFontUrl from '../assets/fonts/Monocraft.ttf';
 
 interface FlashSegment {
   address: number;
@@ -20,6 +17,9 @@ interface FlashSegment {
 interface CompiledBundle {
   metadata: {
     chip?: string;
+    flash_mode?: string;
+    flash_size?: string;
+    flash_freq?: string;
     flash_files: Array<{ offset: string; file: string }>;
   };
   segments: FlashSegment[];
@@ -38,6 +38,9 @@ interface BrowserCmsisDapFlasher {
 
 interface FlashAdapterOptions {
   chip: string;
+  flashMode?: string;
+  flashSize?: string;
+  flashFreq?: string;
   onProgress?: (percent: number, message?: string) => void;
 }
 
@@ -57,7 +60,7 @@ interface TotemProgrammingIDEProps {
   onProgramSuccess: (totemId: string) => void;
 }
 
-const TERMINAL_WELCOME = `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`;
+const MONITOR_FONT_FAMILY = "'Monocraft', 'DM Mono', 'Monaco', 'Consolas', monospace";
 
 const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   totem,
@@ -88,14 +91,11 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   
   // Serial monitor state
-  const [, setTermOutput] = useState<string>('');
+  const [termOutput, setTermOutput] = useState<string>('');
   const [commandInput, setCommandInput] = useState('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const terminalRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<Terminal | null>(null);
-  const terminalInputRef = useRef('');
-  const terminalHistoryIndexRef = useRef(-1);
   
   // Command builder state
   const [selectedCommand, setSelectedCommand] = useState<string>('hello');
@@ -173,68 +173,10 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   };
   const boardInfo = getBoardInfo();
 
+  // Autoscroll terminal
   useEffect(() => {
-    let cancelled = false;
-
-    const loadMonocraft = async () => {
-      try {
-        const face = new FontFace('Monocraft', `url(${monocraftFontUrl}) format('truetype')`);
-        const loadedFace = await face.load();
-        if (!cancelled) {
-          document.fonts.add(loadedFace);
-          if (xtermRef.current) {
-            xtermRef.current.options.fontFamily = "'Monocraft', 'DM Mono', 'Consolas', monospace";
-          }
-        }
-      } catch {
-      }
-    };
-
-    loadMonocraft();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (activeTab !== 'monitor' || !terminalRef.current) return;
-
-    if (!xtermRef.current) {
-      const term = new Terminal({
-        convertEol: true,
-        disableStdin: false,
-        cursorBlink: true,
-        cursorStyle: 'block',
-        fontFamily: "'Monocraft', 'DM Mono', 'Consolas', monospace",
-        fontSize: 13,
-        lineHeight: 1.45,
-        scrollback: 5000,
-        theme: {
-          background: tok.termBg,
-          foreground: tok.termText,
-          cursor: tok.termText,
-        },
-      });
-      term.open(terminalRef.current);
-      xtermRef.current = term;
-
-      if (termOutputRef.current.length > 0) {
-        term.write(termOutputRef.current.replace(/\r?\n/g, '\r\n'));
-      } else {
-        term.write(TERMINAL_WELCOME.replace(/\r?\n/g, '\r\n'));
-        termOutputRef.current = TERMINAL_WELCOME;
-        setTermOutput(TERMINAL_WELCOME);
-        term.write('> ');
-      }
-    }
-
-    xtermRef.current.options.theme = {
-      background: tok.termBg,
-      foreground: tok.termText,
-      cursor: tok.termText,
-    };
-  }, [activeTab, tok.termBg, tok.termText]);
+    if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+  }, [termOutput]);
 
   useEffect(() => {
     const cmdDef = COMMANDS[selectedCommand];
@@ -245,13 +187,7 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     }
   }, [selectedCommand]);
 
-  useEffect(() => {
-    return () => {
-      xtermRef.current?.dispose();
-      xtermRef.current = null;
-      disconnect();
-    };
-  }, []);
+  useEffect(() => { return () => { disconnect(); }; }, []);
 
   useEffect(() => {
     try {
@@ -269,94 +205,7 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const appendToTerminal = (text: string) => {
     termOutputRef.current += text;
     setTermOutput(prev => prev + text);
-    xtermRef.current?.write(text.replace(/\r?\n/g, '\r\n'));
   };
-
-  const overwriteTerminalInput = (nextInput: string) => {
-    const term = xtermRef.current;
-    if (!term) return;
-
-    if (terminalInputRef.current.length > 0) {
-      term.write('\b \b'.repeat(terminalInputRef.current.length));
-    }
-
-    terminalInputRef.current = nextInput;
-    if (nextInput.length > 0) {
-      term.write(nextInput);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab !== 'monitor' || !xtermRef.current) return;
-
-    const term = xtermRef.current;
-    const terminalInputSubscription = term.onData(async (data: string) => {
-      if (data === '\u001b[A') {
-        if (commandHistory.length === 0) return;
-        const nextIndex = terminalHistoryIndexRef.current < commandHistory.length - 1
-          ? terminalHistoryIndexRef.current + 1
-          : terminalHistoryIndexRef.current;
-        terminalHistoryIndexRef.current = nextIndex;
-        const cmd = commandHistory[commandHistory.length - 1 - nextIndex] ?? '';
-        overwriteTerminalInput(cmd);
-        return;
-      }
-
-      if (data === '\u001b[B') {
-        if (commandHistory.length === 0) return;
-        if (terminalHistoryIndexRef.current > 0) {
-          const nextIndex = terminalHistoryIndexRef.current - 1;
-          terminalHistoryIndexRef.current = nextIndex;
-          const cmd = commandHistory[commandHistory.length - 1 - nextIndex] ?? '';
-          overwriteTerminalInput(cmd);
-        } else {
-          terminalHistoryIndexRef.current = -1;
-          overwriteTerminalInput('');
-        }
-        return;
-      }
-
-      if (data === '\u007f') {
-        if (terminalInputRef.current.length > 0) {
-          terminalInputRef.current = terminalInputRef.current.slice(0, -1);
-          term.write('\b \b');
-        }
-        return;
-      }
-
-      if (data === '\u0003') {
-        term.write('^C\r\n> ');
-        terminalInputRef.current = '';
-        terminalHistoryIndexRef.current = -1;
-        return;
-      }
-
-      if (data === '\r') {
-        const command = terminalInputRef.current.trim();
-        term.write('\r\n');
-        terminalInputRef.current = '';
-        terminalHistoryIndexRef.current = -1;
-
-        if (!command) {
-          term.write('> ');
-          return;
-        }
-
-        await sendCommand(command, { echoCommand: false, clearManualInput: false });
-        term.write('> ');
-        return;
-      }
-
-      if (data >= ' ' && data !== '\u007f') {
-        terminalInputRef.current += data;
-        term.write(data);
-      }
-    });
-
-    return () => {
-      terminalInputSubscription.dispose();
-    };
-  }, [activeTab, commandHistory]);
 
   // =====================================================
   // BLOCK SEQUENCER
@@ -498,7 +347,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
       setIsConnected(true);
       appendToTerminal('[✓ Connected!]\n\n');
-      xtermRef.current?.focus();
       readLoop(reader);
 
     } catch (e: any) {
@@ -526,33 +374,35 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
         if (value) {
           setRxBytes(prev => prev + value.length);
 
+          // Only show non-JSON lines in terminal to keep it clean,
+          // but still buffer for JSON parsing
           buffer += value;
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
 
           for (const line of lines) {
-            const normalizedLine = line.replace(/\r$/, '');
-            appendToTerminal(normalizedLine + '\n');
-
-            const trimmed = normalizedLine.trim();
+            const trimmed = line.trim();
             if (!trimmed) continue;
 
+            // Try to parse as Benji's JSON telemetry
             try {
               const d = JSON.parse(trimmed);
+              // Update telemetry panel
               setTelemetry(prev => ({
                 v1:  d.v1  !== undefined ? d.v1  : prev?.v1  ?? 0,
                 v2:  d.v2  !== undefined ? d.v2  : prev?.v2  ?? 0,
                 en:  d.en  !== undefined ? d.en  : prev?.en  ?? 0,
                 sg0: d.sg0 !== undefined ? d.sg0 : prev?.sg0 ?? 0,
               }));
+              // Show compact telemetry in terminal
+              appendToTerminal(`[TEL] v1:${d.v1?.toFixed(1)} v2:${d.v2?.toFixed(1)} en:${d.en} sg0:${d.sg0}\n`);
+              if (d.msg) appendToTerminal(`[MSG] ${d.msg}\n`);
             } catch {
+              // Not JSON — show as-is
+              appendToTerminal(trimmed + '\n');
             }
           }
         }
-      }
-
-      if (buffer.length > 0) {
-        appendToTerminal(buffer);
       }
     } catch (error: any) {
       if (!error.message?.includes('cancel')) {
@@ -611,22 +461,14 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     }
   };
 
-  const sendCommand = async (
-    command: string,
-    options: { echoCommand?: boolean; clearManualInput?: boolean } = {}
-  ) => {
-    const { echoCommand = true, clearManualInput = true } = options;
+  const sendCommand = async (command: string) => {
     if (!command.trim()) return;
-    if (!isConnected) { appendToTerminal('(not connected)\n'); return; }
+    if (!isConnected) { appendToTerminal('[Not connected - click Connect first]\n'); return; }
     setCommandHistory(prev => [...prev, command]);
     setHistoryIndex(-1);
-    if (echoCommand) {
-      appendToTerminal(`> ${command}\n`);
-    }
+    appendToTerminal(`> ${command}\n`);
     await sendData(command);
-    if (clearManualInput) {
-      setCommandInput('');
-    }
+    setCommandInput('');
   };
 
   const sendBuilderCommand = async () => {
@@ -823,6 +665,14 @@ void loop() {
     URL.revokeObjectURL(url);
   };
 
+  const normalizeCompilePath = (candidatePath: string, selectedName: string): string => {
+    const trimmed = candidatePath.trim();
+    const chosen = trimmed || `main/${selectedName}`;
+    const lower = chosen.toLowerCase();
+    if (lower.endsWith('.ino')) return chosen.slice(0, -4) + '.cpp';
+    return chosen;
+  };
+
   const compileSourceViaBackend = async (): Promise<CompiledBundle> => {
     if (!selectedFile) throw new Error('Please select a source file first');
     const cleanUrl = backendUrl.trim().replace(/\/+$/, '');
@@ -832,7 +682,10 @@ void loop() {
     addLog(`Uploading ${selectedFile.name} to backend...`);
 
     const formData = new FormData();
-    const compilePath = sourcePath.trim() || `main/${selectedFile.name}`;
+    const compilePath = normalizeCompilePath(sourcePath, selectedFile.name);
+    if (compilePath !== (sourcePath.trim() || `main/${selectedFile.name}`)) {
+      addLog(`Adjusted compile path for IDF compatibility: ${compilePath}`);
+    }
     formData.append('files', selectedFile);
     formData.append('paths', compilePath);
 
@@ -864,8 +717,12 @@ void loop() {
       const binary = zip.file(entry.file);
       if (!binary) throw new Error(`Bundle missing artifact: ${entry.file}`);
       const data = await binary.async('uint8array');
+      const address = Number.parseInt(entry.offset, 16);
+      if (!Number.isFinite(address)) {
+        throw new Error(`Invalid flash address in metadata: ${entry.offset}`);
+      }
       segments.push({
-        address: Number.parseInt(entry.offset, 16),
+        address,
         path: entry.file,
         data,
       });
@@ -876,6 +733,10 @@ void loop() {
   };
 
   const flashWithBuiltInEsptool = async (segments: FlashSegment[], options: FlashAdapterOptions) => {
+    if (!(window as any).isSecureContext) {
+      throw new Error('Web Serial/WebUSB flashing requires HTTPS (or localhost).');
+    }
+
     if (!(navigator as any).serial?.requestPort) {
       throw new Error('Web Serial is not available in this browser. Use Chrome or Edge.');
     }
@@ -890,11 +751,12 @@ void loop() {
     options.onProgress?.(62, 'Requesting serial port...');
     const port = await (navigator as any).serial.requestPort();
     const transport = new (Transport as any)(port);
-    const baudrate = 460800;
+    const baudrate = 115200;
     const loader = new (ESPLoader as any)({ transport, baudrate, terminal });
 
-    options.onProgress?.(66, `Connecting to ${options.chip} bootloader...`);
-    await loader.main();
+    try {
+      options.onProgress?.(66, `Connecting to ${options.chip} bootloader...`);
+      await loader.main();
 
     const totalBytes = segments.reduce((sum, seg) => sum + seg.data.length, 0);
     let writtenBytes = 0;
@@ -906,28 +768,29 @@ void loop() {
       options.onProgress?.(Math.max(66, Math.min(100, percent)), `Flashing segment ${fileIndex + 1}/${segments.length}...`);
     };
 
-    const fileArray = segments.map(seg => ({ data: seg.data, address: seg.address }));
-    const flashOptions = {
-      fileArray,
-      flashSize: 'keep',
-      flashMode: 'keep',
-      flashFreq: 'keep',
-      eraseAll: false,
-      compress: true,
-      reportProgress,
-    };
+      const fileArray = segments.map(seg => ({ data: seg.data, address: seg.address }));
+      const flashOptions = {
+        fileArray,
+        flashSize: options.flashSize || 'keep',
+        flashMode: options.flashMode || 'keep',
+        flashFreq: options.flashFreq || 'keep',
+        eraseAll: false,
+        compress: true,
+        reportProgress,
+      };
 
-    const chip = (loader as any).chip;
-    if (chip?.writeFlash) {
-      await chip.writeFlash(flashOptions);
-    } else if ((loader as any).writeFlash) {
-      await (loader as any).writeFlash(flashOptions);
-    } else {
-      throw new Error('esptool-js loaded but writeFlash API was not found.');
-    }
-
-    if ((transport as any).disconnect) {
-      await (transport as any).disconnect();
+      const chip = (loader as any).chip;
+      if (chip?.writeFlash) {
+        await chip.writeFlash(flashOptions);
+      } else if ((loader as any).writeFlash) {
+        await (loader as any).writeFlash(flashOptions);
+      } else {
+        throw new Error('esptool-js loaded but writeFlash API was not found.');
+      }
+    } finally {
+      if ((transport as any).disconnect) {
+        await (transport as any).disconnect();
+      }
     }
   };
 
@@ -950,6 +813,9 @@ void loop() {
       try {
         await flashWithBuiltInEsptool(bundle.segments, {
           chip: bundle.metadata.chip || 'esp32s3',
+          flashMode: bundle.metadata.flash_mode,
+          flashSize: bundle.metadata.flash_size,
+          flashFreq: bundle.metadata.flash_freq,
           onProgress: (percent, message) => {
             setProgress(Math.max(60, Math.min(100, Math.round(percent))));
             if (message) addLog(message);
@@ -957,6 +823,9 @@ void loop() {
         });
         return;
       } catch (error: any) {
+        if (error?.name === 'NotFoundError') {
+          throw new Error('No serial port selected. Flash canceled.');
+        }
         addLog(`Built-in esptool direct flash unavailable: ${error?.message || String(error)}`);
       }
     }
@@ -995,15 +864,7 @@ void loop() {
         addLog(`Starting ${modeLabel} flash adapter...`);
         await flashWithAdapter(bundle, mode);
       } else {
-        addLog(`Binary selected (${selectedFile.name}) - using legacy simulated flash flow for ${modeLabel}`);
-        for (let i = 0; i <= 100; i += 10) {
-          await new Promise(resolve => setTimeout(resolve, 300));
-          setProgress(i);
-          if (i === 0) addLog('Connecting to bootloader...');
-          if (i === 20) addLog('Erasing flash...');
-          if (i === 40) addLog('Writing firmware...');
-          if (i === 80) addLog('Verifying...');
-        }
+        throw new Error(`Unsupported file type for real flashing: ${selectedFile.name}. Upload source (.c/.cpp/.ino) so backend can compile and return a valid flash bundle.`);
       }
       setProgress(100);
       addLog('✓ Flash complete!');
@@ -1052,8 +913,7 @@ void loop() {
 
       <div style={styles.content}>
         {/* ==================== MONITOR TAB ==================== */}
-        {activeTab === 'monitor' && (
-          <div style={{ display: 'flex', height: 'calc(100vh - 180px)', overflow: 'hidden' }}>
+        <div style={{ display: activeTab === 'monitor' ? 'flex' : 'none', height: 'calc(100vh - 180px)', overflow: 'hidden', fontFamily: MONITOR_FONT_FAMILY }}>
 
             {/* Block Sequencer Panel */}
             <div style={styles.blockPanel}>
@@ -1186,16 +1046,7 @@ void loop() {
                 <button style={{ ...styles.btnConnect, backgroundColor: isConnected ? '#c62828' : '#2e7d32' }} onClick={connect}>
                   {isConnected ? '❌ Disconnect' : '🔌 Connect'}
                 </button>
-                <button
-                  style={styles.btnSmall}
-                  onClick={() => {
-                    setTermOutput('');
-                    termOutputRef.current = '';
-                    xtermRef.current?.clear();
-                  }}
-                >
-                  🗑️ Clear
-                </button>
+                <button style={styles.btnSmall} onClick={() => { setTermOutput(''); termOutputRef.current = ''; }}>🗑️ Clear</button>
                 <div style={styles.connectionStatus}>
                   <span style={{ color: isConnected ? '#4caf50' : '#888', fontSize: '20px', lineHeight: '1' }}>●</span>
                   <span style={{ color: isConnected ? '#4caf50' : '#888' }}>{isConnected ? 'Connected' : 'Disconnected'}</span>
@@ -1204,19 +1055,28 @@ void loop() {
 
               {/* Motor Control Panel — ESP32 only (Benji's single-char protocol) */}
               {boardType === 'esp32' && (
-                <BenjiPanel sendChar={sendChar} isConnected={isConnected} telemetry={telemetry} tok={tok} />
+                <BenjiPanel sendChar={sendChar} isConnected={isConnected} telemetry={telemetry} tok={tok} monitorFontFamily={MONITOR_FONT_FAMILY} />
               )}
 
               {/* Terminal Output */}
-              <div ref={terminalRef} style={styles.terminal} />
+              <div ref={terminalRef} style={styles.terminal}>
+                {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
+              </div>
 
+              {/* Manual Input */}
+              <div style={styles.inputRow}>
+                <input type="text" style={styles.manualInput}
+                  placeholder={isConnected ? "Type command and press Enter..." : "Connect first..."}
+                  value={commandInput} onChange={e => setCommandInput(e.target.value)}
+                  onKeyDown={handleKeyDown} disabled={!isConnected}
+                />
+                <button style={styles.btnInputSend} onClick={() => sendCommand(commandInput)} disabled={!isConnected}>Send</button>
+              </div>
             </div>
           </div>
-        )}
 
         {/* ==================== FLASH TAB ==================== */}
-        {activeTab === 'flash' && (
-          <div style={{ display: 'flex', gap: '15px', height: 'calc(100vh - 180px)' }}>
+        <div style={{ display: activeTab === 'flash' ? 'flex' : 'none', gap: '15px', height: 'calc(100vh - 180px)' }}>
             <div style={styles.flashSidebar}>
               <div style={styles.flashSection}>
                 <h4 style={styles.flashSectionTitle}>📁 Firmware File</h4>
@@ -1372,7 +1232,6 @@ void loop() {
               )}
             </div>
           </div>
-        )}
       </div>
     </div>
   );
@@ -1396,9 +1255,10 @@ interface BenjiPanelProps {
   isConnected: boolean;
   telemetry: { v1: number; v2: number; en: number; sg0: number } | null;
   tok: ReturnType<typeof T>;
+  monitorFontFamily: string;
 }
 
-const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetry, tok }) => {
+const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetry, tok, monitorFontFamily }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const disabled = !isConnected;
 
@@ -1420,7 +1280,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
         fontWeight: 700, fontSize: '13px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
-        fontFamily: "'Nunito', 'Helvetica Neue', sans-serif",
+        fontFamily: monitorFontFamily,
         userSelect: 'none',
         WebkitUserSelect: 'none',
       } as React.CSSProperties}
@@ -1441,7 +1301,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
         fontWeight: 700, fontSize: '13px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
-        fontFamily: "'Nunito', 'Helvetica Neue', sans-serif",
+        fontFamily: monitorFontFamily,
       }}
     >
       {label}
@@ -1465,7 +1325,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
       <div onClick={() => setIsExpanded(p => !p)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 12px', cursor: 'pointer', background: tok.panelHeaderBg, borderBottom: isExpanded ? `1px solid ${tok.orange}33` : 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '15px' }}>🤖</span>
-          <span style={{ fontWeight: 800, fontSize: '12px', color: tok.orangeText, fontFamily: "'Nunito', 'Helvetica Neue', sans-serif" }}>Roxanne Motor Controls</span>
+          <span style={{ fontWeight: 800, fontSize: '12px', color: tok.orangeText, fontFamily: monitorFontFamily }}>Roxanne Motor Controls</span>
           {/* EN status pill */}
           {telemetry && (
             <span style={{
@@ -1494,12 +1354,12 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
               ].map(({ label, value, color }) => (
                 <div key={label} style={{ background: '#1a1a1a', borderRadius: '8px', padding: '6px 12px', border: '1px solid #333', minWidth: '80px' }}>
                   <div style={{ fontSize: '10px', color: tok.textMuted, textTransform: 'uppercase' as const }}>{label}</div>
-                  <div style={{ fontSize: '20px', fontFamily: "'DM Mono', monospace", color, marginTop: '2px' }}>{value}</div>
+                  <div style={{ fontSize: '20px', fontFamily: monitorFontFamily, color, marginTop: '2px' }}>{value}</div>
                 </div>
               ))}
               <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '6px 12px', border: '1px solid #333', minWidth: '100px' }}>
                 <div style={{ fontSize: '10px', color: tok.textMuted, textTransform: 'uppercase' as const }}>S0 Load (SG)</div>
-                <div style={{ fontSize: '20px', fontFamily: "'DM Mono', monospace", color: sg0Color, marginTop: '2px' }}>{telemetry.sg0}</div>
+                <div style={{ fontSize: '20px', fontFamily: monitorFontFamily, color: sg0Color, marginTop: '2px' }}>{telemetry.sg0}</div>
                 <div style={{ fontSize: '9px', color: '#555', marginTop: '2px' }}>0=stall · 510=free</div>
               </div>
             </div>
@@ -1590,9 +1450,9 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   baudSelect: { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.08)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '13px' },
   btnSmall: { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.07)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', cursor: 'pointer' },
   connectionStatus: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
-  terminal: { flex: 1, padding: '8px', overflow: 'hidden', background: 'transparent' },
+  terminal: { flex: 1, padding: '15px', whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '13px', color: tok.termText, fontFamily: MONITOR_FONT_FAMILY, lineHeight: '1.5', background: 'transparent' },
   inputRow: { display: 'flex', borderTop: `1px solid ${tok.border}` },
-  manualInput: { flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg, border: 'none', color: tok.termText, fontSize: '14px', fontFamily: "'DM Mono', 'Monaco', monospace", outline: 'none' },
+  manualInput: { flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg, border: 'none', color: tok.termText, fontSize: '14px', fontFamily: MONITOR_FONT_FAMILY, outline: 'none' },
   btnInputSend: { padding: '12px 20px', backgroundColor: tok.orange, border: 'none', borderLeft: `1px solid ${tok.border}`, color: tok.textOnOrange, fontSize: '13px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
   section: { backgroundColor: tok.cardBg, borderRadius: '12px', padding: '20px', marginBottom: '15px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
   sectionTitle: { margin: '0 0 15px 0', color: tok.textPrimary, fontSize: '14px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
@@ -1636,7 +1496,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   editorPlaceholder: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#d1d5db' },
   blockPanel: { width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column', backgroundColor: tok.panelBg, borderRight: `1.5px solid ${tok.border}`, overflow: 'hidden' },
   blockPanelHeader: { padding: '10px 12px 8px', borderBottom: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: tok.panelHeaderBg },
-  sequenceNameInput: { backgroundColor: 'transparent', border: 'none', borderBottom: `1.5px solid ${tok.border}`, color: tok.textPrimary, fontSize: '13px', fontWeight: '700', fontFamily: "'Nunito', sans-serif", outline: 'none', padding: '2px 0', width: '100%' },
+  sequenceNameInput: { backgroundColor: 'transparent', border: 'none', borderBottom: `1.5px solid ${tok.border}`, color: tok.textPrimary, fontSize: '13px', fontWeight: '700', fontFamily: MONITOR_FONT_FAMILY, outline: 'none', padding: '2px 0', width: '100%' },
   blockList: { flex: 1, overflowY: 'auto' as const, padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' },
   blockEmpty: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '30px 0', flex: 1 },
   blockCard: { backgroundColor: tok.inputBg, borderRadius: '10px', borderLeft: `3px solid ${tok.orange}`, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
@@ -1645,7 +1505,7 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   blockControls: { display: 'flex', gap: '2px' },
   blockCtrlBtn: { backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`, color: tok.textMuted, fontSize: '11px', cursor: 'pointer', borderRadius: '5px', padding: '1px 5px', lineHeight: 1.4, minWidth: '22px', minHeight: '22px', fontWeight: '700' },
   blockBody: { display: 'flex', flexDirection: 'column' as const, gap: '4px' },
-  blockInput: { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', padding: '4px 7px', fontFamily: "'DM Mono', 'Consolas', monospace", outline: 'none', width: '100%', boxSizing: 'border-box' as const },
+  blockInput: { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', padding: '4px 7px', fontFamily: MONITOR_FONT_FAMILY, outline: 'none', width: '100%', boxSizing: 'border-box' as const },
   blockAddArea: { padding: '6px 8px', borderTop: `1.5px solid ${tok.borderSubtle}`, position: 'relative' as const },
   btnAddBlock: { width: '100%', padding: '8px', backgroundColor: tok.orangeFaint, border: `1.5px dashed ${tok.border}`, borderRadius: '8px', color: tok.orange, fontSize: '12px', cursor: 'pointer', minHeight: '36px', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
   addMenuPopup: { display: 'flex', flexDirection: 'column' as const, gap: '2px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '10px', overflow: 'hidden', boxShadow: tok.shadow },
@@ -1653,9 +1513,9 @@ const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSPrope
   blockRunArea: { padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column' as const, gap: '6px' },
   btnRun: { width: '100%', padding: '10px', backgroundColor: tok.green, border: `1.5px solid ${tok.green}55`, borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', minHeight: '40px', fontFamily: "'Nunito', sans-serif", boxShadow: '0 2px 8px rgba(22,163,74,0.2)' },
   btnStop: { width: '100%', padding: '10px', backgroundColor: tok.red, border: `1.5px solid ${tok.red}55`, borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', minHeight: '40px', fontFamily: "'Nunito', sans-serif" },
-  blockStats: { textAlign: 'center' as const, color: tok.textMuted, fontSize: '10px', fontFamily: "'DM Mono', 'Monaco', monospace" },
+  blockStats: { textAlign: 'center' as const, color: tok.textMuted, fontSize: '10px', fontFamily: MONITOR_FONT_FAMILY },
   blockSettings: { padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column' as const, gap: '5px' },
-  settingsSelect: { backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', padding: '3px 5px', outline: 'none', flex: 1 },
+  settingsSelect: { backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', padding: '3px 5px', outline: 'none', flex: 1, fontFamily: MONITOR_FONT_FAMILY },
   cmdRefToggle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', background: 'none', border: 'none', color: tok.textMuted, fontSize: '10px', textTransform: 'uppercase' as const, letterSpacing: '0.8px', cursor: 'pointer', padding: '4px 0', minHeight: '28px', fontFamily: "'Nunito', sans-serif" },
   cmdRefList: { display: 'flex', flexDirection: 'column' as const, gap: '1px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto' as const },
   cmdRefRow: { display: 'grid', gridTemplateColumns: '70px 1fr', gridTemplateRows: 'auto auto', gap: '0 6px', padding: '6px 8px', background: tok.orangeFaint, border: `1.5px solid ${tok.borderSubtle}`, borderRadius: '7px', cursor: 'pointer', textAlign: 'left' as const, transition: 'background 0.1s', fontFamily: "'Nunito', sans-serif" },
