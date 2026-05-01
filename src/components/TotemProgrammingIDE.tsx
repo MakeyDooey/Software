@@ -6,43 +6,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { TotemStatus } from '../types/totem';
 import usbService from '../services/usbService';
 import { useTheme, T } from '../theme/ThemeContext';
-import JSZip from 'jszip';
-
-interface FlashSegment {
-  address: number;
-  path: string;
-  data: Uint8Array;
-}
-
-interface CompiledBundle {
-  metadata: {
-    chip?: string;
-    flash_mode?: string;
-    flash_size?: string;
-    flash_freq?: string;
-    flash_files: Array<{ offset: string; file: string }>;
-  };
-  segments: FlashSegment[];
-  zipBlob: Blob;
-}
-
-interface BrowserEspFlasher {
-  flashSegments: (segments: FlashSegment[], options: { chip: string; onProgress?: (percent: number, message?: string) => void }) => Promise<void>;
-}
-
-type FlashMode = 'direct' | 'cmsis-dap';
-
-interface BrowserCmsisDapFlasher {
-  flashSegments: (segments: FlashSegment[], options: { chip: string; onProgress?: (percent: number, message?: string) => void }) => Promise<void>;
-}
-
-interface FlashAdapterOptions {
-  chip: string;
-  flashMode?: string;
-  flashSize?: string;
-  flashFreq?: string;
-  onProgress?: (percent: number, message?: string) => void;
-}
 
 // ─── RPS Result Popup ─────────────────────────────────────────────────────────
 
@@ -179,8 +142,6 @@ interface TotemProgrammingIDEProps {
   onProgramSuccess: (totemId: string) => void;
 }
 
-const MONITOR_FONT_FAMILY = "'Monocraft', 'DM Mono', 'Monaco', 'Consolas', monospace";
-
 const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   totem,
   onClose,
@@ -195,9 +156,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const [isProgramming, setIsProgramming] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
-  const [backendUrl, setBackendUrl] = useState<string>(() => localStorage.getItem('makeydooey-backend-url') || 'http://127.0.0.1:8000');
-  const [sourcePath, setSourcePath] = useState<string>('main/main.c');
-  const [lastBundleBlob, setLastBundleBlob] = useState<Blob | null>(null);
 
   const [fileContent, setFileContent] = useState<string>('');
   const [editedContent, setEditedContent] = useState<string>('');
@@ -316,7 +274,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
   useEffect(() => { localStorage.setItem('makeydooey-blocks', JSON.stringify(blocks)); }, [blocks]);
   useEffect(() => { localStorage.setItem('makeydooey-sequence-name', sequenceName); }, [sequenceName]);
-  useEffect(() => { localStorage.setItem('makeydooey-backend-url', backendUrl.trim()); }, [backendUrl]);
 
   const appendToTerminal = (text: string) => {
     termOutputRef.current += text;
@@ -674,9 +631,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
   const processSelectedFile = async (file: File) => {
     setSelectedFile(file);
-    if (!sourcePath || sourcePath === 'main/main.c') {
-      setSourcePath(`main/${file.name}`);
-    }
     addLog(`Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
     const textExtensions = ['.c', '.cpp', '.h', '.hpp', '.ino', '.txt', '.json', '.py', '.s', '.asm'];
     const isTextFile = textExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
@@ -804,236 +758,19 @@ void loop() {
     const blob = new Blob([ESP32_LED_EXAMPLE], { type: 'text/plain' });
     const file = new File([blob], fileName, { type: 'text/plain' });
     setSelectedFile(file); setFileContent(ESP32_LED_EXAMPLE); setEditedContent(ESP32_LED_EXAMPLE);
-    setSourcePath('main/main.c');
     setIsEditorOpen(true); setEditorMode('view'); setHasUnsavedChanges(false);
     addLog(`Loaded example: ${fileName}`);
   };
 
-  const downloadBlob = (blob: Blob, fileName: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const normalizeCompilePath = (candidatePath: string, selectedName: string): string => {
-    const trimmed = candidatePath.trim();
-    const chosen = trimmed || `main/${selectedName}`;
-    const lower = chosen.toLowerCase();
-    if (lower.endsWith('.ino')) return chosen.slice(0, -4) + '.cpp';
-    return chosen;
-  };
-
-  const compileSourceViaBackend = async (): Promise<CompiledBundle> => {
-    if (!selectedFile) throw new Error('Please select a source file first');
-    const cleanUrl = backendUrl.trim().replace(/\/+$/, '');
-    if (!cleanUrl) throw new Error('Backend URL is required');
-
-    setProgress(10);
-    addLog(`Uploading ${selectedFile.name} to backend...`);
-
-    const formData = new FormData();
-    const compilePath = normalizeCompilePath(sourcePath, selectedFile.name);
-    if (compilePath !== (sourcePath.trim() || `main/${selectedFile.name}`)) {
-      addLog(`Adjusted compile path for IDF compatibility: ${compilePath}`);
-    }
-    formData.append('files', selectedFile);
-    formData.append('paths', compilePath);
-
-    const response = await fetch(`${cleanUrl}/compile`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`Compile failed (${response.status}): ${detail}`);
-    }
-
-    setProgress(40);
-    
-    const contentType = response.headers.get('Content-Type') || '';
-    if (contentType.includes('application/octet-stream')) {
-      addLog('Compile complete. Received merged binary.');
-      const binBlob = await response.blob();
-      const data = new Uint8Array(await binBlob.arrayBuffer());
-      
-      const metadata = {
-        chip: 'esp32s3',
-        flash_mode: 'keep',
-        flash_size: 'keep',
-        flash_freq: 'keep',
-        flash_files: [{ offset: '0x0', file: 'firmware.bin' }]
-      };
-      
-      const segments: FlashSegment[] = [{
-        address: 0x0,
-        path: 'firmware.bin',
-        data
-      }];
-      
-      setProgress(60);
-      return { metadata, segments, zipBlob: binBlob };
-    }
-
-    addLog('Compile complete. Parsing flash bundle...');
-    const zipBlob = await response.blob();
-    const zip = await JSZip.loadAsync(zipBlob);
-
-    const metadataFile = zip.file('metadata.json');
-    if (!metadataFile) throw new Error('metadata.json missing in bundle');
-    const metadata = JSON.parse(await metadataFile.async('string')) as CompiledBundle['metadata'];
-
-    if (!Array.isArray(metadata.flash_files) || metadata.flash_files.length === 0) {
-      throw new Error('No flash files found in metadata');
-    }
-
-    const segments: FlashSegment[] = [];
-    for (const entry of metadata.flash_files) {
-      const binary = zip.file(entry.file);
-      if (!binary) throw new Error(`Bundle missing artifact: ${entry.file}`);
-      const data = await binary.async('uint8array');
-      const address = Number.parseInt(entry.offset, 16);
-      if (!Number.isFinite(address)) {
-        throw new Error(`Invalid flash address in metadata: ${entry.offset}`);
-      }
-      segments.push({
-        address,
-        path: entry.file,
-        data,
-      });
-    }
-
-    setProgress(60);
-    return { metadata, segments, zipBlob };
-  };
-
-  const flashWithBuiltInEsptool = async (segments: FlashSegment[], options: FlashAdapterOptions) => {
-    if (!(window as any).isSecureContext) {
-      throw new Error('Web Serial/WebUSB flashing requires HTTPS (or localhost).');
-    }
-
-    if (!(navigator as any).serial?.requestPort) {
-      throw new Error('Web Serial is not available in this browser. Use Chrome or Edge.');
-    }
-
-    const { ESPLoader, Transport } = await import('esptool-js');
-    const terminal = {
-      clean: () => {},
-      writeLine: (line: string) => { if (line) addLog(`[esptool] ${line}`); },
-      write: (line: string) => { if (line) addLog(`[esptool] ${line}`); },
-    };
-
-    options.onProgress?.(62, 'Requesting serial port...');
-    const port = await (navigator as any).serial.requestPort();
-    const transport = new (Transport as any)(port);
-    const baudrate = 115200;
-    const loader = new (ESPLoader as any)({ transport, baudrate, terminal });
-
-    try {
-      options.onProgress?.(66, `Connecting to ${options.chip} bootloader...`);
-      await loader.main();
-
-    const totalBytes = segments.reduce((sum, seg) => sum + seg.data.length, 0);
-    let writtenBytes = 0;
-
-    const reportProgress = (fileIndex: number, bytesWrittenInFile: number, bytesTotalInFile: number) => {
-      const completedBefore = segments.slice(0, fileIndex).reduce((sum, seg) => sum + seg.data.length, 0);
-      writtenBytes = completedBefore + Math.min(bytesWrittenInFile, bytesTotalInFile);
-      const percent = 66 + Math.round((writtenBytes / Math.max(totalBytes, 1)) * 34);
-      options.onProgress?.(Math.max(66, Math.min(100, percent)), `Flashing segment ${fileIndex + 1}/${segments.length}...`);
-    };
-
-      const fileArray = segments.map(seg => ({ data: seg.data, address: seg.address }));
-      const flashOptions = {
-        fileArray,
-        flashSize: options.flashSize || 'keep',
-        flashMode: options.flashMode || 'keep',
-        flashFreq: options.flashFreq || 'keep',
-        eraseAll: false,
-        compress: true,
-        reportProgress,
-      };
-
-      const chip = (loader as any).chip;
-      if (chip?.writeFlash) {
-        await chip.writeFlash(flashOptions);
-      } else if ((loader as any).writeFlash) {
-        await (loader as any).writeFlash(flashOptions);
-      } else {
-        throw new Error('esptool-js loaded but writeFlash API was not found.');
-      }
-    } finally {
-      if ((transport as any).disconnect) {
-        await (transport as any).disconnect();
-      }
-    }
-  };
-
-  const getDirectFlasherAdapter = (): BrowserEspFlasher | undefined => {
-    const modern = (window as any).__makeydooeyEsptoolWebUsbFlasher as BrowserEspFlasher | undefined;
-    if (modern?.flashSegments) return modern;
-    const legacy = (window as any).__makeydooeyEspFlasher as BrowserEspFlasher | undefined;
-    if (legacy?.flashSegments) return legacy;
-    return undefined;
-  };
-
-  const getCmsisDapFlasherAdapter = (): BrowserCmsisDapFlasher | undefined => {
-    const candidate = (window as any).__makeydooeyCmsisDapFlasher as BrowserCmsisDapFlasher | undefined;
-    if (candidate?.flashSegments) return candidate;
-    return undefined;
-  };
-
-  const flashWithAdapter = async (bundle: CompiledBundle, mode: FlashMode) => {
-    if (mode === 'direct') {
-      try {
-        await flashWithBuiltInEsptool(bundle.segments, {
-          chip: bundle.metadata.chip || 'esp32s3',
-          flashMode: bundle.metadata.flash_mode,
-          flashSize: bundle.metadata.flash_size,
-          flashFreq: bundle.metadata.flash_freq,
-          onProgress: (percent, message) => {
-            setProgress(Math.max(60, Math.min(100, Math.round(percent))));
-            if (message) addLog(message);
-          },
-        });
-        return;
-      } catch (error: any) {
-        if (error?.name === 'NotFoundError') {
-          throw new Error('No serial port selected. Flash canceled.');
-        }
-        addLog(`Built-in esptool direct flash unavailable: ${error?.message || String(error)}`);
-      }
-    }
-
-    const adapter = mode === 'direct' ? getDirectFlasherAdapter() : getCmsisDapFlasherAdapter();
-    if (!adapter?.flashSegments) {
-      addLog(`No ${mode === 'direct' ? 'esptool/webusb' : 'CMSIS-DAP'} adapter found. Downloading flash bundle instead.`);
-      downloadBlob(bundle.zipBlob, 'esp32s3-flash-bundle.zip');
-      if (mode === 'direct') {
-        throw new Error('Direct flash unavailable. Install esptool-js dependencies and/or define window.__makeydooeyEsptoolWebUsbFlasher.flashSegments(...) (or legacy window.__makeydooeyEspFlasher.flashSegments(...)).');
-      }
-      throw new Error('CMSIS-DAP adapter unavailable. Define window.__makeydooeyCmsisDapFlasher.flashSegments(...) to enable bridge flashing.');
-    }
-
-    await adapter.flashSegments(bundle.segments, {
-      chip: bundle.metadata.chip || 'esp32s3',
-      onProgress: (percent, message) => {
-        setProgress(Math.max(60, Math.min(100, Math.round(percent))));
-        if (message) addLog(message);
-      },
-    });
-  };
-
-  const handleFlashFirmware = async (mode: FlashMode) => {
+  const handleFlashFirmware = async () => {
     if (!selectedFile) { alert('Please select a firmware file first'); return; }
     const fileName = selectedFile.name.toLowerCase();
     const isSourceFile = fileName.endsWith('.ino') || fileName.endsWith('.c') || fileName.endsWith('.cpp');
-    const modeLabel = mode === 'direct' ? 'Direct (esptool/webusb)' : 'CMSIS-DAP bridge';
+    if (isSourceFile) {
+      addLog(`Source file — needs Arduino IDE to compile`);
+      if (confirm(`Download "${selectedFile.name}" to flash via Arduino IDE?`)) { handleDownloadFile(); }
+      return;
+    }
     setIsProgramming(true); setProgress(0);
     addLog(`Flashing: ${selectedFile.name}`);
     for (let i = 0; i <= 100; i += 10) {
@@ -1044,6 +781,9 @@ void loop() {
       if (i === 40) addLog('Writing firmware...');
       if (i === 80) addLog('Verifying...');
     }
+    setIsProgramming(false); addLog('✓ Flash complete!');
+    onProgramSuccess(totem.id);
+    if (confirm('Flash complete! Go to Monitor tab?')) setActiveTab('monitor');
   };
 
   const handleClose = async () => { await disconnect(); onClose(); };
@@ -1392,7 +1132,6 @@ interface BenjiPanelProps {
   taughtPoses: Record<'rock' | 'paper' | 'scissors', boolean>;
   onTaughtPosesChange: (poses: Record<'rock' | 'paper' | 'scissors', boolean>) => void;
   tok: ReturnType<typeof T>;
-  monitorFontFamily: string;
 }
 
 const BenjiPanel: React.FC<BenjiPanelProps> = ({
@@ -1465,7 +1204,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
         fontWeight: 700, fontSize: '13px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
-        fontFamily: monitorFontFamily,
+        fontFamily: "'Nunito', 'Helvetica Neue', sans-serif",
       }}
     >
       {label}
@@ -1550,12 +1289,12 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
               ].map(({ label, value, color }) => (
                 <div key={label} style={{ background: '#1a1a1a', borderRadius: '8px', padding: '6px 12px', border: '1px solid #333', minWidth: '80px' }}>
                   <div style={{ fontSize: '10px', color: tok.textMuted, textTransform: 'uppercase' as const }}>{label}</div>
-                  <div style={{ fontSize: '20px', fontFamily: monitorFontFamily, color, marginTop: '2px' }}>{value}</div>
+                  <div style={{ fontSize: '20px', fontFamily: "'DM Mono', monospace", color, marginTop: '2px' }}>{value}</div>
                 </div>
               ))}
               <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '6px 12px', border: '1px solid #333', minWidth: '100px' }}>
                 <div style={{ fontSize: '10px', color: tok.textMuted, textTransform: 'uppercase' as const }}>S0 Load (SG)</div>
-                <div style={{ fontSize: '20px', fontFamily: monitorFontFamily, color: sg0Color, marginTop: '2px' }}>{telemetry.sg0}</div>
+                <div style={{ fontSize: '20px', fontFamily: "'DM Mono', monospace", color: sg0Color, marginTop: '2px' }}>{telemetry.sg0}</div>
                 <div style={{ fontSize: '9px', color: '#555', marginTop: '2px' }}>0=stall · 510=free</div>
               </div>
             </div>
