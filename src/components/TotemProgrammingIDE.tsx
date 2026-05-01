@@ -3,13 +3,10 @@
 // Motor panel uses Benji's single-char protocol (no line endings, no delay).
 //
 // SHAMANLINK SUPPORT (VID 1fc9 / PID 0094):
-//   MTL masking applies ONLY to MotorTotem-bound commands:
-//     • Single-char motor controls (DC, steppers)    → [MTL]:<char>\r\n
-//     • RPS moves (rock/paper/scissors)              → [MTL]:rock\r\n  etc.
-//     • TEACH:<pose> and ZERO                        → [MTL]:TEACH:rock\r\n  etc.
-//
-//   General terminal communication (manual input, sequencer, hello, get_pid…)
-//   goes to ShamanLink as raw text — NO [MTL] prefix.
+//   ShamanLink broadcasts all commands raw on RS485.
+//   Motor controls (DC, steppers, RPS, TEACH, ZERO) go raw — NO [MTL] prefix.
+//   The [MTL]: prefix is only for commands targeting the STM32/MTL specifically.
+//   General terminal input also goes raw.
 
 import React, { useState, useRef, useEffect } from 'react';
 import type { TotemStatus } from '../types/totem';
@@ -188,8 +185,8 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const readerRef    = useRef<any>(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Whether the currently connected port is a ShamanLink
   const [isShamanLink, setIsShamanLink] = useState(false);
+  const isShamanLinkRef = useRef(false);
 
   const [txBytes, setTxBytes] = useState(0);
   const [rxBytes, setRxBytes] = useState(0);
@@ -213,8 +210,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const stopSequenceRef = useRef(false);
   const termOutputRef = useRef('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Keep isShamanLink in a ref so sendChar / sendRaw closures always see latest value
-  const isShamanLinkRef = useRef(false);
 
   const COMMANDS: {[key: string]: {params: Array<{label: string, defaultValue: string}>, description: string}} = {
     "hello":      { params: [], description: "Test connection" },
@@ -293,28 +288,19 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   };
 
   // =====================================================
-  // SHAMANLINK MASKING
+  // SEND HELPERS
   // =====================================================
   //
-  // All outgoing data must go through these two helpers.
-  // When ShamanLink is detected the payload is wrapped:
+  // Direct ESP32:  raw bytes over USB Serial (Benji single-char protocol)
   //
-  //   Direct (ESP32):     raw bytes
-  //   ShamanLink:        "[MTL]:<payload>\r\n"
-  //
-  // Single-char motor controls are treated as the full payload.
-  // Multi-char commands likewise: "hello" → "[MTL]:hello\r\n"
-  // Named RPS moves:  "rock" / "paper" / "scissors" via sendMTLMove()
+  // ShamanLink:    ShamanLink firmware exposes a "query <str>" command that
+  //                forwards <str> to UART1/RS485 and waits for a response.
+  //                So ALL motor commands go as:  "query <cmd>\r\n"
+  //                e.g. hold DC1 CW button  →  "query q\r\n"
+  //                     TEACH:rock          →  "query TEACH:rock\r\n"
+  //                     rock RPS move       →  "query rock\r\n"
+  //                This is ONLY applied when isShamanLink is true.
 
-  /** Wrap a string in the ShamanLink MTL frame and encode to bytes */
-  const makeMTLFrame = (payload: string): Uint8Array => {
-    return new TextEncoder().encode(`[MTL]:${payload}\r\n`);
-  };
-
-  /**
-   * Low-level write — always goes straight to the raw writer.
-   * Caller is responsible for framing when ShamanLink is active.
-   */
   const writeRaw = async (bytes: Uint8Array) => {
     if (!rawWriterRef.current) return;
     try {
@@ -326,35 +312,31 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   };
 
   /**
-   * Send a single character — used exclusively by motor controls (DC, steppers, stop).
-   * These are always MotorTotem-bound, so they always get [MTL] framing over ShamanLink.
-   *  - Direct ESP32: write the raw char
-   *  - ShamanLink:   wrap as [MTL]:<char>\r\n
+   * Send a single motor-control character.
+   * Direct ESP32: raw byte (no line ending — Benji protocol)
+   * ShamanLink:   "query <char>\r\n"
    */
   const sendChar = async (char: string) => {
     if (!rawWriterRef.current) return;
     if (isShamanLinkRef.current) {
-      const frame = makeMTLFrame(char);
-      appendToTerminal(`[SL→MTL] [MTL]:${char}\\r\\n\n`);
-      await writeRaw(frame);
+      appendToTerminal(`[SL] query ${char}\n`);
+      await writeRaw(new TextEncoder().encode(`query ${char}\r\n`));
     } else {
       await writeRaw(new TextEncoder().encode(char));
     }
   };
 
   /**
-   * Send a motor-totem-bound string (TEACH, ZERO, RPS — NOT general terminal commands).
-   * Always gets [MTL] framing over ShamanLink.
-   *  - Direct: write str as-is (caller supplies \n)
-   *  - ShamanLink: strip trailing \r\n then re-wrap as [MTL]:...\r\n
+   * Send a multi-char motor command (TEACH:rock, ZERO, etc.)
+   * Direct ESP32: raw string as-is (caller supplies \n)
+   * ShamanLink:   "query <cmd>\r\n"
    */
   const sendRaw = async (str: string) => {
     if (!rawWriterRef.current) return;
     if (isShamanLinkRef.current) {
       const payload = str.replace(/[\r\n]+$/, '');
-      const frame = makeMTLFrame(payload);
-      appendToTerminal(`[SL→MTL] [MTL]:${payload}\\r\\n\n`);
-      await writeRaw(frame);
+      appendToTerminal(`[SL] query ${payload}\n`);
+      await writeRaw(new TextEncoder().encode(`query ${payload}\r\n`));
     } else {
       await writeRaw(new TextEncoder().encode(str));
     }
@@ -362,46 +344,40 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
   /**
    * Send a named RPS move.
-   * Always MotorTotem-bound → always [MTL] framed over ShamanLink.
-   *  - ShamanLink: [MTL]:rock\r\n  /  [MTL]:paper\r\n  /  [MTL]:scissors\r\n
-   *  - Direct ESP32: RPS:<char>\n  (original protocol)
+   * Direct ESP32: "RPS:<char>\n"
+   * ShamanLink:   "query rock\r\n" / "query paper\r\n" / "query scissors\r\n"
    */
   const sendMTLMove = async (move: 'r' | 'p' | 's') => {
     const name = move === 'r' ? 'rock' : move === 'p' ? 'paper' : 'scissors';
     if (isShamanLinkRef.current) {
-      const frame = makeMTLFrame(name);
-      appendToTerminal(`[SL→MTL] [MTL]:${name}\\r\\n\n`);
-      await writeRaw(frame);
+      appendToTerminal(`[SL] query ${name}\n`);
+      await writeRaw(new TextEncoder().encode(`query ${name}\r\n`));
     } else {
       await writeRaw(new TextEncoder().encode(`RPS:${move}\n`));
     }
   };
 
   /**
-   * Send a general terminal command (manual input, sequencer, hello, get_pid…).
-   * These are NOT MotorTotem-bound — they go to ShamanLink raw, no [MTL] prefix.
-   * Over a direct ESP32 connection the original char-delay + line-ending logic applies.
+   * Send a general terminal command (manual input, sequencer, etc.)
+   * Direct ESP32: char-delay + line-ending (Nucleo compatible)
+   * ShamanLink:   raw with \r\n (goes directly to ShamanLink CLI, not forwarded)
+   *               If user wants to forward manually they can type "query <cmd>" themselves.
    */
   const sendData = async (str: string) => {
     if (!rawWriterRef.current) { appendToTerminal('[Not connected]\n'); return; }
 
-    if (isShamanLinkRef.current) {
-      // Raw to ShamanLink — no MTL framing for general terminal traffic
-      let end = lineEnding;
-      if (end === '\\r') end = '\r';
-      else if (end === '\\n') end = '\n';
-      else if (end === '\\r\\n') end = '\r\n';
-      const payload = str + end;
-      await writeRaw(new TextEncoder().encode(payload));
-      return;
-    }
-
-    // Direct path — original char-delay + line-ending logic
     let end = lineEnding;
     if (end === '\\r') end = '\r';
     else if (end === '\\n') end = '\n';
     else if (end === '\\r\\n') end = '\r\n';
     const payload = str + end;
+
+    if (isShamanLinkRef.current) {
+      await writeRaw(new TextEncoder().encode(payload));
+      return;
+    }
+
+    // Direct path — char-delay + line-ending logic for Nucleo compatibility
     try {
       for (const char of payload) {
         await rawWriterRef.current.write(new TextEncoder().encode(char));
@@ -536,8 +512,7 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
       appendToTerminal(`[Device: VID=0x${info.usbVendorId?.toString(16) || '?'} PID=0x${info.usbProductId?.toString(16) || '?'}]\n`);
 
       if (sl) {
-        appendToTerminal(`[🔮 ShamanLink detected — MTL command masking active]\n`);
-        appendToTerminal(`[Format: [MTL]:<command>\\r\\n]\n`);
+        appendToTerminal(`[🔮 ShamanLink detected — broadcasting raw on RS485]\n`);
       }
 
       appendToTerminal(`[Opening at ${config.baudRate} baud...]\n`);
@@ -549,8 +524,8 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
       appendToTerminal('─────────────────────────────────────\n');
       if (sl) {
-        appendToTerminal('  ShamanLink → MotorTotem Bridge\n');
-        appendToTerminal('  Commands masked as [MTL]:cmd\\r\\n\n');
+        appendToTerminal('  ShamanLink → RS485 Bus\n');
+        appendToTerminal('  Commands sent raw, broadcast to all nodes\n');
       } else {
         appendToTerminal('  Roxanne Motor Totem\n');
         appendToTerminal('  Connected at 115200 baud\n');
@@ -619,36 +594,60 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
+        const processLine = (trimmed: string) => {
+  if (!trimmed) return;
 
-          if (trimmed.startsWith('TAUGHT:')) {
-            const name = trimmed.split(':')[1]?.split(' ')[0] as 'rock' | 'paper' | 'scissors';
-            if (name === 'rock' || name === 'paper' || name === 'scissors') {
-              setTaughtPoses(prev => ({ ...prev, [name]: true }));
-            }
-            appendToTerminal(trimmed + '\n');
-            continue;
-          }
+  if (trimmed.startsWith('TAUGHT:')) {
+    const name = trimmed.split(':')[1]?.split(' ')[0] as 'rock' | 'paper' | 'scissors';
+    if (name === 'rock' || name === 'paper' || name === 'scissors') {
+      setTaughtPoses(prev => ({ ...prev, [name]: true }));
+    }
+    appendToTerminal(trimmed + '\n');
+    return;
+  }
 
-          try {
-            const d = JSON.parse(trimmed);
-            if (d.v1 !== undefined || d.v2 !== undefined) {
-              setTelemetry({ v1: d.v1 ?? 0, v2: d.v2 ?? 0, en: d.en ?? 0, sg0: d.sg0 ?? 0 });
-              appendToTerminal(`[TEL] v1:${(d.v1 ?? 0).toFixed(1)} v2:${(d.v2 ?? 0).toFixed(1)} en:${d.en} sg0:${d.sg0}\n`);
-            } else if (d.rps) {
-              const { user, cpu, result: rpsRes } = d.rps;
-              appendToTerminal(`[RPS] You: ${user} | CPU: ${cpu} → ${rpsRes.toUpperCase()}\n`);
-              setRpsResult({ user, cpu, result: rpsRes });
-              setRpsResultTimestamp(Date.now());
-            } else {
-              appendToTerminal(trimmed + '\n');
-            }
-          } catch {
-            appendToTerminal(trimmed + '\n');
-          }
-        }
+  try {
+    const d = JSON.parse(trimmed);
+    if (d.v1 !== undefined || d.v2 !== undefined) {
+      setTelemetry({ v1: d.v1 ?? 0, v2: d.v2 ?? 0, en: d.en ?? 0, sg0: d.sg0 ?? 0 });
+      appendToTerminal(`[TEL] v1:${(d.v1 ?? 0).toFixed(1)} v2:${(d.v2 ?? 0).toFixed(1)} en:${d.en} sg0:${d.sg0}\n`);
+    } else if (d.rps) {
+      const { user, cpu, result: rpsRes } = d.rps;
+      appendToTerminal(`[RPS] You: ${user} | CPU: ${cpu} → ${rpsRes.toUpperCase()}\n`);
+      setRpsResult({ user, cpu, result: rpsRes });
+      setRpsResultTimestamp(Date.now());
+    } else {
+      appendToTerminal(trimmed + '\n');
+    }
+  } catch {
+    appendToTerminal(trimmed + '\n');
+  }
+};
+
+for (const line of lines) {
+  // Normalize: replace literal \x0D\x0A text sequences with real newlines
+  const normalized = line.replace(/\\x0D\\x0A/g, '\n').replace(/\\r\\n/g, '\n');
+  const parts = normalized.split('\n');
+
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.startsWith('[DIAG] RX Data:')) {
+      const payload = trimmed.replace('[DIAG] RX Data:', '').trim();
+      const sublines = payload.split(/\\r\\n|\r\n|\n/);
+      for (const sub of sublines) {
+        const s = sub.trim();
+        if (s) processLine(s);
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('[DIAG]')) continue;
+
+    processLine(trimmed);
+  }
+}
       }
     } catch (error: any) {
       if (!error.message?.includes('cancel')) {
@@ -906,10 +905,9 @@ void loop() {
               <span style={{ color: boardInfo.color, marginLeft: '10px', fontSize: '13px', backgroundColor: `${boardInfo.color}22`, padding: '2px 8px', borderRadius: '4px' }}>
                 {boardInfo.label}
               </span>
-              {/* ShamanLink masking badge */}
               {isShamanLink && (
                 <span style={{ marginLeft: '8px', fontSize: '11px', backgroundColor: 'rgba(168,85,247,0.15)', color: '#a855f7', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(168,85,247,0.35)', fontWeight: 700 }}>
-                  🔗 [MTL] masking ON
+                  🔮 ShamanLink → RS485
                 </span>
               )}
             </h2>
@@ -1040,7 +1038,6 @@ void loop() {
                       <option value="9600">9600</option>
                     </select>
                   </div>
-                  {/* Char delay and EOL only shown for direct connections */}
                   {!isShamanLink && (
                     <>
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -1060,7 +1057,7 @@ void loop() {
                   )}
                   {isShamanLink && (
                     <div style={{ fontSize: '9px', color: '#a855f7', fontFamily: "'DM Mono', monospace", padding: '3px 0', opacity: 0.8 }}>
-                      🔮 [MTL] framing active
+                      🔮 raw → RS485 broadcast
                     </div>
                   )}
                 </div>
@@ -1083,7 +1080,6 @@ void loop() {
                   </div>
                 </div>
 
-                {/* Show BenjiPanel for both esp32 and shamanlink (same motor controls) */}
                 {(boardType === 'esp32' || isShamanLink) && (
                   <div style={{ overflowY: 'auto', maxHeight: '45vh', flexShrink: 0 }}>
                     <BenjiPanel
@@ -1102,13 +1098,13 @@ void loop() {
                 )}
 
                 <div ref={terminalRef} style={styles.terminal}>
-                  {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. ShamanLink (1FC9:0094) auto-detected when plugged in\n   • Motor controls & RPS → [MTL]:<cmd>\\r\\n  (auto-framed)\n   • Terminal commands   → raw to ShamanLink\n3. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
+                  {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. ShamanLink (1FC9:0094) auto-detected when plugged in\n   • All commands sent raw — ShamanLink broadcasts on RS485\n   • Motor Totem receives bare commands directly\n3. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
                 </div>
 
                 <div style={styles.inputRow}>
                   <input type="text" style={styles.manualInput}
                     placeholder={isConnected
-                      ? isShamanLink ? "Type command → sent raw to ShamanLink (motor controls use [MTL] automatically)" : "Type command and press Enter..."
+                      ? isShamanLink ? "Type command → sent raw to RS485 bus..." : "Type command and press Enter..."
                       : "Connect first..."}
                     value={commandInput} onChange={e => setCommandInput(e.target.value)}
                     onKeyDown={handleKeyDown} disabled={!isConnected}
@@ -1285,10 +1281,15 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
     if (rpsResultTimestamp > 0) setRpsWaiting(false);
   }, [rpsResultTimestamp]);
 
+  useEffect(() => {
+    if (!rpsWaiting) return;
+    const t = setTimeout(() => setRpsWaiting(false), 8000);
+    return () => clearTimeout(t);
+  }, [rpsWaiting]);
+
   const sendRps = async (move: 'r' | 'p' | 's') => {
     setLastRpsMove(move);
     setRpsWaiting(true);
-    // sendMTLMove handles both ShamanLink and direct paths
     await sendMTLMove(move);
   };
 
@@ -1376,7 +1377,6 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
       background: isShamanLink ? 'rgba(168,85,247,0.06)' : tok.orangeFaint,
       flexShrink: 0,
     }}>
-      {/* Header */}
       <div
         onClick={() => setIsExpanded(p => !p)}
         style={{
@@ -1389,11 +1389,11 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '15px' }}>{isShamanLink ? '🔮' : '🤖'}</span>
           <span style={{ fontWeight: 800, fontSize: '12px', color: isShamanLink ? '#a855f7' : tok.orangeText, fontFamily: "'Nunito', 'Helvetica Neue', sans-serif" }}>
-            {isShamanLink ? 'ShamanLink → MotorTotem Controls' : 'Roxanne Motor Controls'}
+            {isShamanLink ? 'ShamanLink → Motor Totem Controls' : 'Roxanne Motor Controls'}
           </span>
           {isShamanLink && (
             <span style={{ fontSize: '9px', color: '#a855f7', fontFamily: "'DM Mono', monospace", background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: '4px', padding: '1px 5px' }}>
-              [MTL] framing
+              raw → RS485
             </span>
           )}
           {telemetry && (
@@ -1416,7 +1416,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
       {isExpanded && (
         <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-          {/* ── Live Telemetry ── */}
+          {/* Live Telemetry */}
           {telemetry && (
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' as const }}>
               {[
@@ -1436,14 +1436,13 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
             </div>
           )}
 
-          {/* ── RPS Hand Positions ── */}
+          {/* RPS Hand Positions */}
           <div>
-            {sectionTitle(`✊ Hand Position (RPS)${isShamanLink ? ' — via ShamanLink' : ''}`)}
+            {sectionTitle('✊ Hand Position (RPS)')}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
               {rpsConfig.map(({ move, emoji, label, desc }) => {
                 const isActive = lastRpsMove === move;
                 const taught = taughtPoses[move === 'r' ? 'rock' : move === 'p' ? 'paper' : 'scissors'];
-                // Over ShamanLink we don't require taught poses — MTL handles RPS directly
                 const isDisabled = disabled || rpsWaiting || (!isShamanLink && !taught);
                 return (
                   <button
@@ -1475,7 +1474,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
                     <span style={{ fontSize: '22px', lineHeight: 1 }}>{emoji}</span>
                     <span style={{ fontSize: '11px', fontWeight: 800, color: isActive ? (isShamanLink ? '#a855f7' : tok.orange) : tok.textPrimary }}>{label}</span>
                     <span style={{ fontSize: '9px', color: isShamanLink ? '#a855f7' : taught ? '#22c55e' : tok.textMuted }}>
-                      {isShamanLink ? '[MTL]' : taught ? '✓ trained' : desc}
+                      {isShamanLink ? 'via RS485' : taught ? '✓ trained' : desc}
                     </span>
                   </button>
                 );
@@ -1501,14 +1500,9 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
                 all positions trained — result popup appears automatically
               </div>
             )}
-            {isShamanLink && (
-              <div style={{ fontSize: '9px', color: '#a855f7', fontFamily: "'DM Mono', monospace", textAlign: 'center' as const }}>
-                ShamanLink route: [MTL]:rock / [MTL]:paper / [MTL]:scissors
-              </div>
-            )}
           </div>
 
-          {/* ── DC Motors ── */}
+          {/* DC Motors */}
           <div>
             {sectionTitle('⚙️ DC Motors')}
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' as const }}>
@@ -1531,7 +1525,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
             </div>
           </div>
 
-          {/* ── Steppers ── */}
+          {/* Steppers */}
           <div>
             {sectionTitle('🔩 Steppers (TMC2209) — hold to run')}
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' as const }}>
@@ -1554,84 +1548,84 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({
             </div>
           </div>
 
-          {/* ── Train RPS Positions — shown for all connection types ── */}
+          {/* Train RPS Positions */}
           <div style={{ borderTop: `1px solid ${isShamanLink ? 'rgba(168,85,247,0.3)' : tok.orange + '33'}`, paddingTop: '10px' }}>
-              <button
-                onClick={() => setTrainOpen(o => !o)}
-                style={{
-                  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 6px 0',
-                  color: tok.orange, fontWeight: 800, fontSize: '11px',
-                  fontFamily: "'Nunito', sans-serif", textTransform: 'uppercase' as const, letterSpacing: '0.06em',
-                }}
-              >
-                <span>🎯 Train RPS Positions {allTaught ? '✓' : `(${Object.values(taughtPoses).filter(Boolean).length}/3)`}</span>
-                <span style={{ fontSize: '13px' }}>{trainOpen ? '▲' : '▼'}</span>
-              </button>
+            <button
+              onClick={() => setTrainOpen(o => !o)}
+              style={{
+                width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 6px 0',
+                color: tok.orange, fontWeight: 800, fontSize: '11px',
+                fontFamily: "'Nunito', sans-serif", textTransform: 'uppercase' as const, letterSpacing: '0.06em',
+              }}
+            >
+              <span>🎯 Train RPS Positions {allTaught ? '✓' : `(${Object.values(taughtPoses).filter(Boolean).length}/3)`}</span>
+              <span style={{ fontSize: '13px' }}>{trainOpen ? '▲' : '▼'}</span>
+            </button>
 
-              {trainOpen && (
-                <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '8px' }}>
-                  <div style={{ fontSize: '10px', color: tok.textMuted, background: tok.inputBg, border: `1px solid ${tok.border}`, borderRadius: '6px', padding: '7px 10px', lineHeight: 1.5 }}>
-                    <span style={{ color: tok.orange, fontWeight: 700 }}>Step 1</span> — Open Roxanne's hand fully, then set home:
-                  </div>
-                  <button
-                    disabled={disabled}
-                    onClick={() => sendRaw('ZERO\n')}
-                    style={{
-                      padding: '8px', borderRadius: '7px', border: `1.5px solid ${tok.border}`,
-                      background: tok.inputBg, color: tok.textPrimary,
-                      fontSize: '11px', fontWeight: 700, cursor: disabled ? 'not-allowed' : 'pointer',
-                      opacity: disabled ? 0.5 : 1, fontFamily: "'Nunito', sans-serif",
-                    }}
-                  >
-                    ⊘ ZERO — Set Open Hand as Home
-                  </button>
-                  <div style={{ fontSize: '10px', color: tok.textMuted, background: tok.inputBg, border: `1px solid ${tok.border}`, borderRadius: '6px', padding: '7px 10px', lineHeight: 1.5 }}>
-                    <span style={{ color: tok.orange, fontWeight: 700 }}>Step 2</span> — Use DC/Stepper controls above to pose the hand, then click the matching button:
-                  </div>
-                  {trainConfig.map(({ name, emoji, label }) => {
-                    const taught = taughtPoses[name];
-                    return (
-                      <button
-                        key={name}
-                        disabled={disabled}
-                        onClick={() => teachPose(name)}
-                        style={{
-                          padding: '10px 12px', borderRadius: '8px',
-                          border: `1.5px solid ${taught ? '#22c55e' : tok.orange}`,
-                          background: taught ? 'rgba(34,197,94,0.1)' : tok.orangeFaint,
-                          color: taught ? '#22c55e' : tok.orange,
-                          fontSize: '12px', fontWeight: 700,
-                          cursor: disabled ? 'not-allowed' : 'pointer',
-                          opacity: disabled ? 0.5 : 1,
-                          fontFamily: "'Nunito', sans-serif",
-                          display: 'flex', alignItems: 'center', gap: '10px',
-                        }}
-                      >
-                        <span style={{ fontSize: '20px' }}>{emoji}</span>
-                        <span style={{ flex: 1, textAlign: 'left' as const }}>
-                          {taught ? `✓ ${label} trained` : `Teach ${label} position`}
-                        </span>
-                        {taught && (
-                          <span
-                            title="Clear this position"
-                            onClick={e => { e.stopPropagation(); onTaughtPosesChange({ ...taughtPoses, [name]: false }); }}
-                            style={{ fontSize: '11px', color: tok.textMuted, cursor: 'pointer', padding: '2px 6px', borderRadius: '4px', background: tok.inputBg }}
-                          >
-                            ✕
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                  {allTaught && (
-                    <div style={{ fontSize: '10px', color: '#22c55e', textAlign: 'center' as const, padding: '6px', background: 'rgba(34,197,94,0.08)', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.25)', fontWeight: 700 }}>
-                      🎉 All positions trained! Use the RPS buttons above to play.
-                    </div>
-                  )}
+            {trainOpen && (
+              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '8px' }}>
+                <div style={{ fontSize: '10px', color: tok.textMuted, background: tok.inputBg, border: `1px solid ${tok.border}`, borderRadius: '6px', padding: '7px 10px', lineHeight: 1.5 }}>
+                  <span style={{ color: tok.orange, fontWeight: 700 }}>Step 1</span> — Open Roxanne's hand fully, then set home:
                 </div>
-              )}
-            </div>
+                <button
+                  disabled={disabled}
+                  onClick={() => sendRaw('ZERO\n')}
+                  style={{
+                    padding: '8px', borderRadius: '7px', border: `1.5px solid ${tok.border}`,
+                    background: tok.inputBg, color: tok.textPrimary,
+                    fontSize: '11px', fontWeight: 700, cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.5 : 1, fontFamily: "'Nunito', sans-serif",
+                  }}
+                >
+                  ⊘ ZERO — Set Open Hand as Home
+                </button>
+                <div style={{ fontSize: '10px', color: tok.textMuted, background: tok.inputBg, border: `1px solid ${tok.border}`, borderRadius: '6px', padding: '7px 10px', lineHeight: 1.5 }}>
+                  <span style={{ color: tok.orange, fontWeight: 700 }}>Step 2</span> — Use DC/Stepper controls above to pose the hand, then click the matching button:
+                </div>
+                {trainConfig.map(({ name, emoji, label }) => {
+                  const taught = taughtPoses[name];
+                  return (
+                    <button
+                      key={name}
+                      disabled={disabled}
+                      onClick={() => teachPose(name)}
+                      style={{
+                        padding: '10px 12px', borderRadius: '8px',
+                        border: `1.5px solid ${taught ? '#22c55e' : tok.orange}`,
+                        background: taught ? 'rgba(34,197,94,0.1)' : tok.orangeFaint,
+                        color: taught ? '#22c55e' : tok.orange,
+                        fontSize: '12px', fontWeight: 700,
+                        cursor: disabled ? 'not-allowed' : 'pointer',
+                        opacity: disabled ? 0.5 : 1,
+                        fontFamily: "'Nunito', sans-serif",
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                      }}
+                    >
+                      <span style={{ fontSize: '20px' }}>{emoji}</span>
+                      <span style={{ flex: 1, textAlign: 'left' as const }}>
+                        {taught ? `✓ ${label} trained` : `Teach ${label} position`}
+                      </span>
+                      {taught && (
+                        <span
+                          title="Clear this position"
+                          onClick={e => { e.stopPropagation(); onTaughtPosesChange({ ...taughtPoses, [name]: false }); }}
+                          style={{ fontSize: '11px', color: tok.textMuted, cursor: 'pointer', padding: '2px 6px', borderRadius: '4px', background: tok.inputBg }}
+                        >
+                          ✕
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+                {allTaught && (
+                  <div style={{ fontSize: '10px', color: '#22c55e', textAlign: 'center' as const, padding: '6px', background: 'rgba(34,197,94,0.08)', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.25)', fontWeight: 700 }}>
+                    🎉 All positions trained! Use the RPS buttons above to play.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
         </div>
       )}
