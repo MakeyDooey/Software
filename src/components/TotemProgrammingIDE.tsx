@@ -7,6 +7,125 @@ import type { TotemStatus } from '../types/totem';
 import usbService from '../services/usbService';
 import { useTheme, T } from '../theme/ThemeContext';
 
+// ─── RPS Result Popup ─────────────────────────────────────────────────────────
+
+type RPSResult = { user: 'r' | 'p' | 's'; cpu: 'r' | 'p' | 's'; result: 'win' | 'lose' | 'draw' } | null;
+
+const MOVE_LABEL: Record<string, string> = { r: 'Rock', p: 'Paper', s: 'Scissors' };
+const MOVE_EMOJI: Record<string, string> = { r: '✊', p: '🖐', s: '✌️' };
+
+const RPSPopup: React.FC<{ rpsResult: RPSResult; onClose: () => void }> = ({ rpsResult, onClose }) => {
+  const { dark } = useTheme();
+  const tok = T(dark);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  if (!rpsResult) return null;
+
+  const { user, cpu, result } = rpsResult;
+
+  const cfg = {
+    win:  { label: 'You Win!',  color: '#22c55e', bg: 'rgba(34,197,94,0.15)',  border: 'rgba(34,197,94,0.4)',  emoji: '🏆' },
+    lose: { label: 'You Lose',  color: '#ef4444', bg: 'rgba(239,68,68,0.15)',  border: 'rgba(239,68,68,0.4)',  emoji: '💀' },
+    draw: { label: 'Draw!',     color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', border: 'rgba(245,158,11,0.4)', emoji: '🤝' },
+  }[result];
+
+  return (
+    <>
+      <style>{`
+        @keyframes rps-backdrop-in { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes rps-card-in { from { transform: scale(0.8) translateY(20px); opacity: 0 } to { transform: scale(1) translateY(0); opacity: 1 } }
+      `}</style>
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 2000,
+          background: 'rgba(0,0,0,0.6)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'rps-backdrop-in 0.2s ease',
+          backdropFilter: 'blur(4px)',
+        }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            background: tok.cardBg,
+            border: `2px solid ${cfg.border}`,
+            borderRadius: '20px',
+            padding: '36px 48px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '20px',
+            minWidth: '320px',
+            boxShadow: `0 0 60px ${cfg.color}33, 0 20px 60px rgba(0,0,0,0.5)`,
+            animation: 'rps-card-in 0.3s cubic-bezier(0.34,1.56,0.64,1)',
+          }}
+        >
+          <div style={{
+            padding: '10px 32px',
+            borderRadius: '999px',
+            background: cfg.bg,
+            border: `2px solid ${cfg.border}`,
+            color: cfg.color,
+            fontSize: '28px',
+            fontWeight: 900,
+            fontFamily: "'Nunito', sans-serif",
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            letterSpacing: '0.5px',
+          }}>
+            <span>{cfg.emoji}</span>
+            <span>{cfg.label}</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: tok.textMuted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', fontFamily: "'Nunito', sans-serif" }}>You</div>
+              <div style={{ fontSize: '56px', lineHeight: 1 }}>{MOVE_EMOJI[user]}</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: tok.textPrimary, marginTop: '6px', fontFamily: "'Nunito', sans-serif" }}>{MOVE_LABEL[user]}</div>
+            </div>
+            <div style={{ fontSize: '20px', color: tok.textMuted, fontWeight: 900, fontFamily: "'Nunito', sans-serif" }}>VS</div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: tok.textMuted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', fontFamily: "'Nunito', sans-serif" }}>ESP32</div>
+              <div style={{ fontSize: '56px', lineHeight: 1 }}>{MOVE_EMOJI[cpu]}</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: tok.textPrimary, marginTop: '6px', fontFamily: "'Nunito', sans-serif" }}>{MOVE_LABEL[cpu]}</div>
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            style={{
+              marginTop: '4px',
+              padding: '10px 32px',
+              border: `1.5px solid ${tok.border}`,
+              borderRadius: '10px',
+              background: 'transparent',
+              color: tok.textMuted,
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              fontFamily: "'Nunito', sans-serif",
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { (e.target as HTMLButtonElement).style.background = tok.surfaceHover; }}
+            onMouseLeave={e => { (e.target as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            Press Esc or click to close
+          </button>
+        </div>
+      </div>
+    </>
+  );
+};
+
+// ─── Main IDE ─────────────────────────────────────────────────────────────────
+
 interface CommandBlock {
   id: string;
   type: 'cmd' | 'delay' | 'waitfor';
@@ -32,14 +151,12 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const tok = T(dark);
   const styles = buildStyles(tok);
   const [activeTab, setActiveTab] = useState<'flash' | 'monitor'>('monitor');
-  
-  // Flash tab state
+
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProgramming, setIsProgramming] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
 
-  // File editor state
   const [fileContent, setFileContent] = useState<string>('');
   const [editedContent, setEditedContent] = useState<string>('');
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -47,37 +164,39 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const [editorMode, setEditorMode] = useState<'view' | 'edit'>('view');
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  
-  // Serial monitor state
+
   const [termOutput, setTermOutput] = useState<string>('');
   const [commandInput, setCommandInput] = useState('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const terminalRef = useRef<HTMLDivElement>(null);
-  
-  // Command builder state
+
   const [selectedCommand, setSelectedCommand] = useState<string>('hello');
   const [commandParams, setCommandParams] = useState<{[key: string]: string}>({});
   const [charDelay, setCharDelay] = useState<number>(10);
   const [lineEnding, setLineEnding] = useState<string>('\\r');
-  
-  // Connection state — Leo's approach: simple refs
+
   const portRef      = useRef<any>(null);
-  const writerRef    = useRef<any>(null); // TextEncoderStream writer (for sendCommand)
-  const rawWriterRef = useRef<any>(null); // Raw byte writer (for sendChar — Benji's protocol)
+  const writerRef    = useRef<any>(null);
+  const rawWriterRef = useRef<any>(null);
   const readerRef    = useRef<any>(null);
   const [isConnected, setIsConnected] = useState(false);
-  
-  // Stats
+
   const [txBytes, setTxBytes] = useState(0);
   const [rxBytes, setRxBytes] = useState(0);
 
-  // Telemetry state — parsed from Benji's JSON stream
   const [telemetry, setTelemetry] = useState<{
     v1: number; v2: number; en: number; sg0: number;
   } | null>(null);
 
-  // Block sequencer state
+  const [rpsResult, setRpsResult] = useState<RPSResult>(null);
+  const [rpsResultTimestamp, setRpsResultTimestamp] = useState(0);
+
+  // ── Taught pose state — lifted to IDE so readLoop can write to it ──────────
+  const [taughtPoses, setTaughtPoses] = useState<Record<'rock' | 'paper' | 'scissors', boolean>>({
+    rock: false, paper: false, scissors: false,
+  });
+
   const [blocks, setBlocks] = useState<CommandBlock[]>([]);
   const [sequenceName, setSequenceName] = useState('My Sequence');
   const [isRunningSequence, setIsRunningSequence] = useState(false);
@@ -85,7 +204,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const [showAddMenu, setShowAddMenu] = useState(false);
   const stopSequenceRef = useRef(false);
   const termOutputRef = useRef('');
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const COMMANDS: {[key: string]: {params: Array<{label: string, defaultValue: string}>, description: string}} = {
@@ -102,7 +220,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
 
   const [config, setConfig] = useState({ baudRate: 115200 });
 
-  // Board type detection — Roxanne / ESP32 by name or VID/PID
   const getBoardType = (): 'esp32' | 'nucleo' | 'unknown' => {
     const detected = usbService.getDeviceType(totem);
     if (detected !== 'unknown') return detected;
@@ -131,7 +248,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   };
   const boardInfo = getBoardInfo();
 
-  // Autoscroll terminal
   useEffect(() => {
     if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
   }, [termOutput]);
@@ -213,14 +329,12 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   const runSequence = async () => {
     if (!isConnected) { appendToTerminal('[Not connected — click Connect first]\n'); return; }
     if (blocks.length === 0) { appendToTerminal('[No blocks in sequence]\n'); return; }
-
     stopSequenceRef.current = false;
     setIsRunningSequence(true);
     const initial: Record<string, 'idle' | 'running' | 'done' | 'error'> = {};
     blocks.forEach(b => { initial[b.id] = 'idle'; });
     setBlockStatuses(initial);
     appendToTerminal(`\n[▶ Running sequence: ${sequenceName}]\n`);
-
     for (const block of blocks) {
       if (stopSequenceRef.current) { appendToTerminal('[■ Sequence stopped]\n'); break; }
       setBlockStatuses(prev => ({ ...prev, [block.id]: 'running' }));
@@ -251,7 +365,6 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
         break;
       }
     }
-
     setIsRunningSequence(false);
     stopSequenceRef.current = false;
     appendToTerminal('[■ Sequence complete]\n\n');
@@ -262,12 +375,10 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
   // =====================================================
   const connect = async () => {
     if (isConnected) { await disconnect(); return; }
-
     if (!('serial' in navigator)) {
       appendToTerminal('[ERROR] Web Serial API not supported. Use Chrome or Edge.\n');
       return;
     }
-
     try {
       appendToTerminal('[Requesting port...]\n');
       const port = await (navigator as any).serial.requestPort();
@@ -275,31 +386,31 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
       appendToTerminal(`[Device: VID=0x${info.usbVendorId?.toString(16) || '?'} PID=0x${info.usbProductId?.toString(16) || '?'}]\n`);
       appendToTerminal(`[Opening at ${config.baudRate} baud...]\n`);
       await port.open({ baudRate: config.baudRate });
-
       try {
         await port.setSignals({ dataTerminalReady: true, requestToSend: true });
         appendToTerminal('[DTR/RTS set]\n');
-      } catch (e) { /* some boards don't support this */ }
+      } catch { /* some boards don't support this */ }
 
-      // Raw byte writer — used by sendChar (Benji's single-char protocol)
-      // Must be acquired BEFORE piping, because pipeTo locks the stream.
-      // We use a separate TransformStream to allow both.
-      // Simplest approach: keep one writer for raw bytes, use TextEncoderStream for text.
-      //
-      // We split: rawWriterRef gets port.writable directly (for single chars),
-      // and we use a second TransformStream for the text encoder path.
-      // But since WritableStream can only have one writer, we use a single
-      // raw Uint8Array writer for everything and encode manually when needed.
+      appendToTerminal('─────────────────────────────────────\n');
+      appendToTerminal('  Roxanne Motor Totem\n');
+      appendToTerminal('  Connected at 115200 baud\n');
+      appendToTerminal('  Waiting for board ready signal...\n');
+      appendToTerminal('─────────────────────────────────────\n\n');
+
       const rawWriter = port.writable.getWriter();
       rawWriterRef.current = rawWriter;
+      writerRef.current    = rawWriter;
 
-      // For the read side, pipe through TextDecoder
       const decoder = new TextDecoderStream();
-      port.readable.pipeTo(decoder.writable);
+      const pipePromise = port.readable.pipeTo(decoder.writable);
+      pipePromise.catch((e: any) => {
+        if (!e.message?.includes('cancel')) {
+          appendToTerminal(`[Pipe Error] ${e.message}\n`);
+        }
+      });
       const reader = decoder.readable.getReader();
 
       portRef.current   = port;
-      writerRef.current = rawWriter; // same writer, sendData will encode manually
       readerRef.current = reader;
 
       setIsConnected(true);
@@ -320,70 +431,109 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     }
   };
 
-  // Read loop — parses Benji's JSON telemetry lines,
-  // also passes everything through to the terminal for visibility.
+  // =====================================================
+  // READ LOOP — parses telemetry, RPS results, and TAUGHT confirmations
+  // =====================================================
   const readLoop = async (reader: any) => {
     let buffer = '';
+    appendToTerminal('[Read loop started]\n');
     try {
       while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) {
-          setRxBytes(prev => prev + value.length);
+        let result;
+        try {
+          result = await reader.read();
+        } catch (readErr: any) {
+          if (readErr.message?.includes('cancel') || readErr.message?.includes('closed')) break;
+          appendToTerminal(`[Read Error] ${readErr.message}\n`);
+          await new Promise(r => setTimeout(r, 100));
+          continue;
+        }
 
-          // Only show non-JSON lines in terminal to keep it clean,
-          // but still buffer for JSON parsing
-          buffer += value;
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
+        const { value, done } = result;
+        if (done) {
+          appendToTerminal('[Stream closed by device]\n');
+          break;
+        }
+        if (!value) continue;
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
+        setRxBytes(prev => prev + value.length);
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
 
-            // Try to parse as Benji's JSON telemetry
-            try {
-              const d = JSON.parse(trimmed);
-              // Update telemetry panel
-              setTelemetry(prev => ({
-                v1:  d.v1  !== undefined ? d.v1  : prev?.v1  ?? 0,
-                v2:  d.v2  !== undefined ? d.v2  : prev?.v2  ?? 0,
-                en:  d.en  !== undefined ? d.en  : prev?.en  ?? 0,
-                sg0: d.sg0 !== undefined ? d.sg0 : prev?.sg0 ?? 0,
-              }));
-              // Show compact telemetry in terminal
-              appendToTerminal(`[TEL] v1:${d.v1?.toFixed(1)} v2:${d.v2?.toFixed(1)} en:${d.en} sg0:${d.sg0}\n`);
-              if (d.msg) appendToTerminal(`[MSG] ${d.msg}\n`);
-            } catch {
-              // Not JSON — show as-is
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          // ── TAUGHT:rock / TAUGHT:paper / TAUGHT:scissors ──────────────
+          if (trimmed.startsWith('TAUGHT:')) {
+            const name = trimmed.split(':')[1]?.split(' ')[0] as 'rock' | 'paper' | 'scissors';
+            if (name === 'rock' || name === 'paper' || name === 'scissors') {
+              setTaughtPoses(prev => ({ ...prev, [name]: true }));
+            }
+            appendToTerminal(trimmed + '\n');
+            continue;
+          }
+
+          try {
+            const d = JSON.parse(trimmed);
+            if (d.v1 !== undefined || d.v2 !== undefined) {
+              setTelemetry({
+                v1:  d.v1  ?? 0,
+                v2:  d.v2  ?? 0,
+                en:  d.en  ?? 0,
+                sg0: d.sg0 ?? 0,
+              });
+              appendToTerminal(`[TEL] v1:${(d.v1 ?? 0).toFixed(1)} v2:${(d.v2 ?? 0).toFixed(1)} en:${d.en} sg0:${d.sg0}\n`);
+            } else if (d.rps) {
+              const { user, cpu, result: rpsRes } = d.rps;
+              appendToTerminal(`[RPS] You: ${user} | CPU: ${cpu} → ${rpsRes.toUpperCase()}\n`);
+              setRpsResult({ user, cpu, result: rpsRes });
+              setRpsResultTimestamp(Date.now());
+            } else {
               appendToTerminal(trimmed + '\n');
             }
+          } catch {
+            appendToTerminal(trimmed + '\n');
           }
         }
       }
     } catch (error: any) {
       if (!error.message?.includes('cancel')) {
-        appendToTerminal(`[Read Error] ${error.message}\n`);
+        appendToTerminal(`[Read Loop Fatal] ${error.message}\n`);
       }
     }
+    appendToTerminal('[Read loop ended]\n');
   };
 
+  // =====================================================
+  // DISCONNECT
+  // =====================================================
   const disconnect = async () => {
     try {
-      if (readerRef.current)    { await readerRef.current.cancel().catch(() => {}); readerRef.current = null; }
-      if (rawWriterRef.current) { await rawWriterRef.current.releaseLock().catch?.(() => {}); rawWriterRef.current = null; }
-      if (writerRef.current)    { writerRef.current = null; }
-      if (portRef.current)      { await portRef.current.close().catch(() => {}); portRef.current = null; }
-    } catch (e) { /* ignore cleanup errors */ }
+      if (readerRef.current) {
+        try { await readerRef.current.cancel(); } catch { /* ignore */ }
+        readerRef.current = null;
+      }
+      if (rawWriterRef.current) {
+        try { rawWriterRef.current.releaseLock(); } catch { /* ignore */ }
+        rawWriterRef.current = null;
+      }
+      writerRef.current = null;
+      if (portRef.current) {
+        try { await portRef.current.close(); } catch { /* ignore */ }
+        portRef.current = null;
+      }
+    } catch { /* ignore */ }
     setIsConnected(false);
     setTelemetry(null);
     appendToTerminal('[Disconnected]\n');
   };
 
   // =====================================================
-  // SEND CHAR — Benji's protocol: single byte, no delay, no line ending
-  // Mirrors: await writer.write(new TextEncoder().encode(char))
+  // TX HELPERS
   // =====================================================
+
   const sendChar = async (char: string) => {
     if (!rawWriterRef.current) return;
     try {
@@ -394,19 +544,24 @@ const TotemProgrammingIDE: React.FC<TotemProgrammingIDEProps> = ({
     }
   };
 
-  // =====================================================
-  // SEND DATA — Leo's character-by-character approach for text commands
-  // Used by sendCommand (block sequencer, manual input)
-  // =====================================================
+  const sendRaw = async (str: string) => {
+    if (!rawWriterRef.current) return;
+    try {
+      const bytes = new TextEncoder().encode(str);
+      await rawWriterRef.current.write(bytes);
+      setTxBytes(prev => prev + bytes.length);
+    } catch (e: any) {
+      appendToTerminal(`[TX Error] ${e.message}\n`);
+    }
+  };
+
   const sendData = async (str: string) => {
     if (!rawWriterRef.current) { appendToTerminal('[Not connected]\n'); return; }
-
     let end = lineEnding;
     if (end === '\\r') end = '\r';
     else if (end === '\\n') end = '\n';
     else if (end === '\\r\\n') end = '\r\n';
     const payload = str + end;
-
     try {
       for (const char of payload) {
         await rawWriterRef.current.write(new TextEncoder().encode(char));
@@ -621,7 +776,7 @@ void loop() {
     for (let i = 0; i <= 100; i += 10) {
       await new Promise(resolve => setTimeout(resolve, 300));
       setProgress(i);
-      if (i === 0) addLog('Connecting to bootloader...');
+      if (i === 0)  addLog('Connecting to bootloader...');
       if (i === 20) addLog('Erasing flash...');
       if (i === 40) addLog('Writing firmware...');
       if (i === 80) addLog('Verifying...');
@@ -638,350 +793,379 @@ void loop() {
   );
 
   return (
-    <div style={styles.container}>
-      {/* Header */}
-      <div style={styles.header}>
-        <div style={styles.headerContent}>
-          <h2 style={styles.title}>
-            {boardInfo.icon} {totem.name}
-            <span style={{ color: boardInfo.color, marginLeft: '10px', fontSize: '13px', backgroundColor: `${boardInfo.color}22`, padding: '2px 8px', borderRadius: '4px' }}>
-              {boardInfo.label}
-            </span>
-          </h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '12px', color: '#666' }}>S/N: {totem.serialNumber}</span>
-            <button style={styles.closeButton} onClick={handleClose}>×</button>
+    <>
+      {rpsResult && <RPSPopup rpsResult={rpsResult} onClose={() => setRpsResult(null)} />}
+
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <div style={styles.headerContent}>
+            <h2 style={styles.title}>
+              {boardInfo.icon} {totem.name}
+              <span style={{ color: boardInfo.color, marginLeft: '10px', fontSize: '13px', backgroundColor: `${boardInfo.color}22`, padding: '2px 8px', borderRadius: '4px' }}>
+                {boardInfo.label}
+              </span>
+            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '12px', color: '#666' }}>S/N: {totem.serialNumber}</span>
+              <button style={styles.closeButton} onClick={handleClose}>×</button>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Tabs */}
-      <div style={styles.tabs}>
-        {(['flash', 'monitor'] as const).map(tab => (
-          <button key={tab} style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }} onClick={() => setActiveTab(tab)}>
-            {tab === 'flash' ? '⚡ Flash' : '📟 Monitor'}
-          </button>
-        ))}
-      </div>
+        <div style={styles.tabs}>
+          {(['flash', 'monitor'] as const).map(tab => (
+            <button key={tab} style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }} onClick={() => setActiveTab(tab)}>
+              {tab === 'flash' ? '⚡ Flash' : '📟 Monitor'}
+            </button>
+          ))}
+        </div>
 
-      <div style={styles.content}>
-        {/* ==================== MONITOR TAB ==================== */}
-        {activeTab === 'monitor' && (
-          <div style={{ display: 'flex', height: 'calc(100vh - 180px)', overflow: 'hidden' }}>
+        <div style={styles.content}>
+          {activeTab === 'monitor' && (
+            <div style={{ display: 'flex', height: 'calc(100vh - 180px)', overflow: 'hidden' }}>
 
-            {/* Block Sequencer Panel */}
-            <div style={styles.blockPanel}>
-              <div style={styles.blockPanelHeader}>
-                <span style={{ color: '#aaa', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Sequence</span>
-                <input style={styles.sequenceNameInput} value={sequenceName} onChange={e => setSequenceName(e.target.value)} disabled={isRunningSequence} />
-              </div>
+              {/* Block Sequencer Panel */}
+              <div style={styles.blockPanel}>
+                <div style={styles.blockPanelHeader}>
+                  <span style={{ color: '#aaa', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Sequence</span>
+                  <input style={styles.sequenceNameInput} value={sequenceName} onChange={e => setSequenceName(e.target.value)} disabled={isRunningSequence} />
+                </div>
 
-              <div style={styles.blockList}>
-                {blocks.length === 0 && (
-                  <div style={styles.blockEmpty}>
-                    <div style={{ fontSize: '24px', marginBottom: '8px', opacity: 0.3 }}>⬡</div>
-                    <div style={{ color: '#555', fontSize: '12px' }}>No blocks yet.</div>
-                    <div style={{ color: '#444', fontSize: '11px', marginTop: '4px' }}>Add a block below to start.</div>
-                  </div>
-                )}
-                {blocks.map((block, idx) => {
-                  const status = blockStatuses[block.id] || 'idle';
-                  const borderColor = block.type === 'cmd' ? '#EB7923' : block.type === 'delay' ? '#16a34a' : '#7c3aed';
-                  const statusColor = status === 'running' ? '#f59e0b' : status === 'done' ? '#16a34a' : status === 'error' ? '#dc2626' : '#d1d5db';
-                  const statusLabel = status === 'running' ? '⏳' : status === 'done' ? '✓' : status === 'error' ? '✗' : '○';
-                  return (
-                    <div key={block.id} style={{ ...styles.blockCard, borderLeftColor: borderColor, opacity: isRunningSequence ? 0.85 : 1 }}>
-                      <div style={styles.blockCardTop}>
-                        <span style={{ ...styles.blockTypeBadge, backgroundColor: borderColor === '#EB7923' ? '#fff3e0' : borderColor === '#16a34a' ? '#dcfce7' : '#ede9fe', color: borderColor === '#EB7923' ? '#92400e' : borderColor === '#16a34a' ? '#14532d' : '#4c1d95' }}>
-                          {block.type === 'cmd' ? 'CMD' : block.type === 'delay' ? 'DELAY' : 'WAIT'}
-                        </span>
-                        <span style={{ color: statusColor, fontSize: '14px', lineHeight: 1 }}>{statusLabel}</span>
-                        {!isRunningSequence && (
-                          <div style={styles.blockControls}>
-                            <button style={styles.blockCtrlBtn} onClick={() => moveBlock(block.id, -1)} disabled={idx === 0}>↑</button>
-                            <button style={styles.blockCtrlBtn} onClick={() => moveBlock(block.id, 1)} disabled={idx === blocks.length - 1}>↓</button>
-                            <button style={{ ...styles.blockCtrlBtn, color: '#dc2626', borderColor: 'rgba(220,38,38,0.25)' }} onClick={() => removeBlock(block.id)}>×</button>
-                          </div>
-                        )}
-                      </div>
-                      {block.type === 'cmd' && (
-                        <div style={styles.blockBody}>
-                          <input style={styles.blockInput} value={block.command ?? ''} onChange={e => updateBlock(block.id, { command: e.target.value })} disabled={isRunningSequence} placeholder="command" list="cmd-suggestions" />
-                          <datalist id="cmd-suggestions">{Object.keys(COMMANDS).map(c => <option key={c} value={c} />)}</datalist>
-                          {COMMANDS[block.command ?? '']?.params.length > 0 && (
-                            <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
-                              {COMMANDS[block.command!].params.map((p, i) => (
-                                <input key={i} style={{ ...styles.blockInput, flex: 1, minWidth: '50px' }}
-                                  value={(block.params ?? [])[i] ?? p.defaultValue}
-                                  onChange={e => {
-                                    const updated = [...(block.params ?? COMMANDS[block.command!].params.map(pp => pp.defaultValue))];
-                                    updated[i] = e.target.value;
-                                    updateBlock(block.id, { params: updated });
-                                  }}
-                                  disabled={isRunningSequence} placeholder={p.label}
-                                />
-                              ))}
+                <div style={styles.blockList}>
+                  {blocks.length === 0 && (
+                    <div style={styles.blockEmpty}>
+                      <div style={{ fontSize: '24px', marginBottom: '8px', opacity: 0.3 }}>⬡</div>
+                      <div style={{ color: '#555', fontSize: '12px' }}>No blocks yet.</div>
+                      <div style={{ color: '#444', fontSize: '11px', marginTop: '4px' }}>Add a block below to start.</div>
+                    </div>
+                  )}
+                  {blocks.map((block, idx) => {
+                    const status = blockStatuses[block.id] || 'idle';
+                    const borderColor = block.type === 'cmd' ? '#EB7923' : block.type === 'delay' ? '#16a34a' : '#7c3aed';
+                    const statusColor = status === 'running' ? '#f59e0b' : status === 'done' ? '#16a34a' : status === 'error' ? '#dc2626' : '#d1d5db';
+                    const statusLabel = status === 'running' ? '⏳' : status === 'done' ? '✓' : status === 'error' ? '✗' : '○';
+                    return (
+                      <div key={block.id} style={{ ...styles.blockCard, borderLeftColor: borderColor, opacity: isRunningSequence ? 0.85 : 1 }}>
+                        <div style={styles.blockCardTop}>
+                          <span style={{ ...styles.blockTypeBadge, backgroundColor: borderColor === '#EB7923' ? '#fff3e0' : borderColor === '#16a34a' ? '#dcfce7' : '#ede9fe', color: borderColor === '#EB7923' ? '#92400e' : borderColor === '#16a34a' ? '#14532d' : '#4c1d95' }}>
+                            {block.type === 'cmd' ? 'CMD' : block.type === 'delay' ? 'DELAY' : 'WAIT'}
+                          </span>
+                          <span style={{ color: statusColor, fontSize: '14px', lineHeight: 1 }}>{statusLabel}</span>
+                          {!isRunningSequence && (
+                            <div style={styles.blockControls}>
+                              <button style={styles.blockCtrlBtn} onClick={() => moveBlock(block.id, -1)} disabled={idx === 0}>↑</button>
+                              <button style={styles.blockCtrlBtn} onClick={() => moveBlock(block.id, 1)} disabled={idx === blocks.length - 1}>↓</button>
+                              <button style={{ ...styles.blockCtrlBtn, color: '#dc2626', borderColor: 'rgba(220,38,38,0.25)' }} onClick={() => removeBlock(block.id)}>×</button>
                             </div>
                           )}
                         </div>
-                      )}
-                      {block.type === 'delay' && (
-                        <div style={styles.blockBody}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <input style={{ ...styles.blockInput, width: '70px' }} type="number" value={block.delayMs ?? 500} onChange={e => updateBlock(block.id, { delayMs: parseInt(e.target.value) || 0 })} disabled={isRunningSequence} min="0" />
-                            <span style={{ color: '#888', fontSize: '11px' }}>ms</span>
+                        {block.type === 'cmd' && (
+                          <div style={styles.blockBody}>
+                            <input style={styles.blockInput} value={block.command ?? ''} onChange={e => updateBlock(block.id, { command: e.target.value })} disabled={isRunningSequence} placeholder="command" list="cmd-suggestions" />
+                            <datalist id="cmd-suggestions">{Object.keys(COMMANDS).map(c => <option key={c} value={c} />)}</datalist>
+                            {COMMANDS[block.command ?? '']?.params.length > 0 && (
+                              <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+                                {COMMANDS[block.command!].params.map((p, i) => (
+                                  <input key={i} style={{ ...styles.blockInput, flex: 1, minWidth: '50px' }}
+                                    value={(block.params ?? [])[i] ?? p.defaultValue}
+                                    onChange={e => {
+                                      const updated = [...(block.params ?? COMMANDS[block.command!].params.map(pp => pp.defaultValue))];
+                                      updated[i] = e.target.value;
+                                      updateBlock(block.id, { params: updated });
+                                    }}
+                                    disabled={isRunningSequence} placeholder={p.label}
+                                  />
+                                ))}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )}
-                      {block.type === 'waitfor' && (
-                        <div style={styles.blockBody}>
-                          <input style={styles.blockInput} value={block.matchStr ?? ''} onChange={e => updateBlock(block.id, { matchStr: e.target.value })} disabled={isRunningSequence} placeholder="match string" />
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                            <input style={{ ...styles.blockInput, width: '60px' }} type="number" value={block.timeoutMs ?? 3000} onChange={e => updateBlock(block.id, { timeoutMs: parseInt(e.target.value) || 0 })} disabled={isRunningSequence} min="100" />
-                            <span style={{ color: '#888', fontSize: '11px' }}>ms timeout</span>
+                        )}
+                        {block.type === 'delay' && (
+                          <div style={styles.blockBody}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <input style={{ ...styles.blockInput, width: '70px' }} type="number" value={block.delayMs ?? 500} onChange={e => updateBlock(block.id, { delayMs: parseInt(e.target.value) || 0 })} disabled={isRunningSequence} min="0" />
+                              <span style={{ color: '#888', fontSize: '11px' }}>ms</span>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
+                        {block.type === 'waitfor' && (
+                          <div style={styles.blockBody}>
+                            <input style={styles.blockInput} value={block.matchStr ?? ''} onChange={e => updateBlock(block.id, { matchStr: e.target.value })} disabled={isRunningSequence} placeholder="match string" />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                              <input style={{ ...styles.blockInput, width: '60px' }} type="number" value={block.timeoutMs ?? 3000} onChange={e => updateBlock(block.id, { timeoutMs: parseInt(e.target.value) || 0 })} disabled={isRunningSequence} min="100" />
+                              <span style={{ color: '#888', fontSize: '11px' }}>ms timeout</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={styles.blockAddArea}>
+                  {showAddMenu ? (
+                    <div style={styles.addMenuPopup}>
+                      <button style={styles.addMenuOption} onClick={() => addBlock('cmd')}><span style={{ color: '#92400e', fontWeight: '700' }}>CMD</span><span style={{ color: '#888', fontSize: '11px' }}>Send a command</span></button>
+                      <button style={styles.addMenuOption} onClick={() => addBlock('delay')}><span style={{ color: '#14532d', fontWeight: '700' }}>DELAY</span><span style={{ color: '#888', fontSize: '11px' }}>Wait N ms</span></button>
+                      <button style={styles.addMenuOption} onClick={() => addBlock('waitfor')}><span style={{ color: '#4c1d95', fontWeight: '700' }}>WAIT FOR</span><span style={{ color: '#888', fontSize: '11px' }}>Match response</span></button>
+                      <button style={{ ...styles.addMenuOption, color: '#666', fontSize: '11px', justifyContent: 'center' }} onClick={() => setShowAddMenu(false)}>Cancel</button>
                     </div>
-                  );
-                })}
-              </div>
+                  ) : (
+                    <button style={styles.btnAddBlock} onClick={() => setShowAddMenu(true)} disabled={isRunningSequence}>+ Add Block</button>
+                  )}
+                </div>
 
-              <div style={styles.blockAddArea}>
-                {showAddMenu ? (
-                  <div style={styles.addMenuPopup}>
-                    <button style={styles.addMenuOption} onClick={() => addBlock('cmd')}><span style={{ color: '#92400e', fontWeight: '700' }}>CMD</span><span style={{ color: '#888', fontSize: '11px' }}>Send a command</span></button>
-                    <button style={styles.addMenuOption} onClick={() => addBlock('delay')}><span style={{ color: '#14532d', fontWeight: '700' }}>DELAY</span><span style={{ color: '#888', fontSize: '11px' }}>Wait N ms</span></button>
-                    <button style={styles.addMenuOption} onClick={() => addBlock('waitfor')}><span style={{ color: '#4c1d95', fontWeight: '700' }}>WAIT FOR</span><span style={{ color: '#888', fontSize: '11px' }}>Match response</span></button>
-                    <button style={{ ...styles.addMenuOption, color: '#666', fontSize: '11px', justifyContent: 'center' }} onClick={() => setShowAddMenu(false)}>Cancel</button>
+                <div style={styles.blockRunArea}>
+                  {isRunningSequence
+                    ? <button style={styles.btnStop} onClick={() => { stopSequenceRef.current = true; }}>■ Stop</button>
+                    : <button style={{ ...styles.btnRun, opacity: (blocks.length === 0 || !isConnected) ? 0.45 : 1 }} onClick={runSequence} disabled={blocks.length === 0 || !isConnected}>▶ Run Sequence</button>
+                  }
+                  <div style={styles.blockStats}>TX: {txBytes} | RX: {rxBytes}</div>
+                </div>
+
+                <div style={styles.blockSettings}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>Baud</label>
+                    <select style={styles.settingsSelect} value={config.baudRate} onChange={e => setConfig({ ...config, baudRate: parseInt(e.target.value) })} disabled={isConnected}>
+                      <option value="115200">115200</option>
+                      <option value="57600">57600</option>
+                      <option value="9600">9600</option>
+                    </select>
                   </div>
-                ) : (
-                  <button style={styles.btnAddBlock} onClick={() => setShowAddMenu(true)} disabled={isRunningSequence}>+ Add Block</button>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>Delay</label>
+                    <input style={{ ...styles.settingsSelect, width: '44px' }} type="number" value={charDelay} onChange={e => setCharDelay(parseInt(e.target.value) || 0)} min="0" max="100" />
+                    <span style={{ color: '#555', fontSize: '10px' }}>ms</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>EOL</label>
+                    <select style={styles.settingsSelect} value={lineEnding} onChange={e => setLineEnding(e.target.value)}>
+                      <option value="\r">CR</option>
+                      <option value="\n">LF</option>
+                      <option value="\r\n">CRLF</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Terminal Area */}
+              <div style={styles.terminalArea}>
+                <div style={styles.controlBar}>
+                  <button style={{ ...styles.btnConnect, backgroundColor: isConnected ? '#c62828' : '#2e7d32' }} onClick={connect}>
+                    {isConnected ? '❌ Disconnect' : '🔌 Connect'}
+                  </button>
+                  <button style={styles.btnSmall} onClick={() => { setTermOutput(''); termOutputRef.current = ''; }}>🗑️ Clear</button>
+                  <div style={styles.connectionStatus}>
+                    <span style={{ color: isConnected ? '#4caf50' : '#888', fontSize: '20px', lineHeight: '1' }}>●</span>
+                    <span style={{ color: isConnected ? '#4caf50' : '#888' }}>{isConnected ? 'Connected' : 'Disconnected'}</span>
+                  </div>
+                </div>
+
+                {boardType === 'esp32' && (
+                  <div style={{ overflowY: 'auto', maxHeight: '45vh', flexShrink: 0 }}>
+                    <BenjiPanel
+                      sendChar={sendChar}
+                      sendRaw={sendRaw}
+                      isConnected={isConnected}
+                      telemetry={telemetry}
+                      rpsResultTimestamp={rpsResultTimestamp}
+                      taughtPoses={taughtPoses}
+                      onTaughtPosesChange={setTaughtPoses}
+                      tok={tok}
+                    />
+                  </div>
                 )}
-              </div>
 
-              <div style={styles.blockRunArea}>
-                {isRunningSequence
-                  ? <button style={styles.btnStop} onClick={() => { stopSequenceRef.current = true; }}>■ Stop</button>
-                  : <button style={{ ...styles.btnRun, opacity: (blocks.length === 0 || !isConnected) ? 0.45 : 1 }} onClick={runSequence} disabled={blocks.length === 0 || !isConnected}>▶ Run Sequence</button>
-                }
-                <div style={styles.blockStats}>TX: {txBytes} | RX: {rxBytes}</div>
-              </div>
+                <div ref={terminalRef} style={styles.terminal}>
+                  {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
+                </div>
 
-              <div style={styles.blockSettings}>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>Baud</label>
-                  <select style={styles.settingsSelect} value={config.baudRate} onChange={e => setConfig({ ...config, baudRate: parseInt(e.target.value) })} disabled={isConnected}>
-                    <option value="115200">115200</option>
-                    <option value="57600">57600</option>
-                    <option value="9600">9600</option>
-                  </select>
-                </div>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>Delay</label>
-                  <input style={{ ...styles.settingsSelect, width: '44px' }} type="number" value={charDelay} onChange={e => setCharDelay(parseInt(e.target.value) || 0)} min="0" max="100" />
-                  <span style={{ color: '#555', fontSize: '10px' }}>ms</span>
-                </div>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <label style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>EOL</label>
-                  <select style={styles.settingsSelect} value={lineEnding} onChange={e => setLineEnding(e.target.value)}>
-                    <option value="\r">CR</option>
-                    <option value="\n">LF</option>
-                    <option value="\r\n">CRLF</option>
-                  </select>
+                <div style={styles.inputRow}>
+                  <input type="text" style={styles.manualInput}
+                    placeholder={isConnected ? "Type command and press Enter..." : "Connect first..."}
+                    value={commandInput} onChange={e => setCommandInput(e.target.value)}
+                    onKeyDown={handleKeyDown} disabled={!isConnected}
+                  />
+                  <button style={styles.btnInputSend} onClick={() => sendCommand(commandInput)} disabled={!isConnected}>Send</button>
                 </div>
               </div>
             </div>
+          )}
 
-            {/* Terminal Area */}
-            <div style={styles.terminalArea}>
-              {/* Control Bar */}
-              <div style={styles.controlBar}>
-                <button style={{ ...styles.btnConnect, backgroundColor: isConnected ? '#c62828' : '#2e7d32' }} onClick={connect}>
-                  {isConnected ? '❌ Disconnect' : '🔌 Connect'}
-                </button>
-                <button style={styles.btnSmall} onClick={() => { setTermOutput(''); termOutputRef.current = ''; }}>🗑️ Clear</button>
-                <div style={styles.connectionStatus}>
-                  <span style={{ color: isConnected ? '#4caf50' : '#888', fontSize: '20px', lineHeight: '1' }}>●</span>
-                  <span style={{ color: isConnected ? '#4caf50' : '#888' }}>{isConnected ? 'Connected' : 'Disconnected'}</span>
-                </div>
-              </div>
-
-              {/* Motor Control Panel — ESP32 only (Benji's single-char protocol) */}
-              {boardType === 'esp32' && (
-                <BenjiPanel sendChar={sendChar} isConnected={isConnected} telemetry={telemetry} tok={tok} />
-              )}
-
-              {/* Terminal Output */}
-              <div ref={terminalRef} style={styles.terminal}>
-                {termOutput || `MakeyDooey Terminal Ready\n\n1. Click "🔌 Connect" and select your device\n2. Use the motor panel above or type commands below\n\nTip: If port is busy, close Arduino Serial Monitor first.\n`}
-              </div>
-
-              {/* Manual Input */}
-              <div style={styles.inputRow}>
-                <input type="text" style={styles.manualInput}
-                  placeholder={isConnected ? "Type command and press Enter..." : "Connect first..."}
-                  value={commandInput} onChange={e => setCommandInput(e.target.value)}
-                  onKeyDown={handleKeyDown} disabled={!isConnected}
-                />
-                <button style={styles.btnInputSend} onClick={() => sendCommand(commandInput)} disabled={!isConnected}>Send</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ==================== FLASH TAB ==================== */}
-        {activeTab === 'flash' && (
-          <div style={{ display: 'flex', gap: '15px', height: 'calc(100vh - 180px)' }}>
-            <div style={styles.flashSidebar}>
-              <div style={styles.flashSection}>
-                <h4 style={styles.flashSectionTitle}>📁 Firmware File</h4>
-                <input ref={fileInputRef} type="file" accept=".bin,.hex,.elf,.c,.cpp,.h,.hpp,.ino,.txt,.json,.py,.s,.asm" style={{ display: 'none' }} onChange={handleFileSelect} />
-                <div style={{ ...styles.dropZone, borderColor: isDragOver ? '#2196F3' : '#444', backgroundColor: isDragOver ? tok.blueFaint : tok.orangeFaint }} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()}>
-                  <div style={{ fontSize: '32px', marginBottom: '10px' }}>{isDragOver ? '📥' : '📂'}</div>
-                  <div style={{ color: '#888', fontSize: '12px' }}>{isDragOver ? 'Drop file here' : 'Drag & drop or click to browse'}</div>
-                  <div style={{ color: '#555', fontSize: '10px', marginTop: '8px' }}>.bin .hex .elf .c .cpp .h .ino .py</div>
-                </div>
-                {selectedFile && (
-                  <div style={styles.selectedFileInfo}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ color: '#4CAF50', fontSize: '16px' }}>✓</span>
-                      <span style={{ color: '#fff', fontSize: '13px', fontWeight: '500' }}>{selectedFile.name}</span>
-                    </div>
-                    <div style={{ color: '#666', fontSize: '11px', marginTop: '4px' }}>{(selectedFile.size / 1024).toFixed(2)} KB</div>
+          {activeTab === 'flash' && (
+            <div style={{ display: 'flex', gap: '15px', height: 'calc(100vh - 180px)' }}>
+              <div style={styles.flashSidebar}>
+                <div style={styles.flashSection}>
+                  <h4 style={styles.flashSectionTitle}>📁 Firmware File</h4>
+                  <input ref={fileInputRef} type="file" accept=".bin,.hex,.elf,.c,.cpp,.h,.hpp,.ino,.txt,.json,.py,.s,.asm" style={{ display: 'none' }} onChange={handleFileSelect} />
+                  <div style={{ ...styles.dropZone, borderColor: isDragOver ? '#2196F3' : '#444', backgroundColor: isDragOver ? tok.blueFaint : tok.orangeFaint }} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()}>
+                    <div style={{ fontSize: '32px', marginBottom: '10px' }}>{isDragOver ? '📥' : '📂'}</div>
+                    <div style={{ color: '#888', fontSize: '12px' }}>{isDragOver ? 'Drop file here' : 'Drag & drop or click to browse'}</div>
+                    <div style={{ color: '#555', fontSize: '10px', marginTop: '8px' }}>.bin .hex .elf .c .cpp .h .ino .py</div>
                   </div>
-                )}
-                <div style={styles.fileActions}>
-                  <button style={styles.btnSecondary} onClick={handleNewFile}>✚ New</button>
-                  <button style={styles.btnSecondary} onClick={() => fileInputRef.current?.click()}>📂 Open</button>
-                  {selectedFile && isEditorOpen && <button style={styles.btnSecondary} onClick={handleDownloadFile}>💾 Save</button>}
-                </div>
-                <div style={{ marginTop: '12px' }}>
-                  <div style={{ color: '#666', fontSize: '10px', marginBottom: '8px', textTransform: 'uppercase' }}>Examples</div>
-                  <button style={{ ...styles.btnSecondary, width: '100%', backgroundColor: '#109810', borderColor: '#0e8514', textAlign: 'left', padding: '10px 12px' }} onClick={handleLoadExample}>💡 ESP32-S3 LED Blink</button>
-                </div>
-              </div>
-
-              <div style={styles.flashSection}>
-                <h4 style={styles.flashSectionTitle}>⚡ Flash Firmware</h4>
-                <button style={{ ...styles.btnFlash, opacity: (!selectedFile || isProgramming) ? 0.5 : 1 }} onClick={handleFlashFirmware} disabled={!selectedFile || isProgramming}>
-                  {isProgramming ? '⏳ Programming...' : '🚀 Flash to Device'}
-                </button>
-                {isProgramming && (
-                  <div style={styles.progressBar}>
-                    <div style={{ ...styles.progressFill, width: `${progress}%` }} />
-                    <div style={styles.progressText}>{progress}%</div>
-                  </div>
-                )}
-                <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>Note: For .ino files, download and flash via Arduino IDE.</div>
-              </div>
-
-              <div style={styles.flashSection}>
-                <h4 style={styles.flashSectionTitle}>🔗 Test Connection</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {SERIAL_TEST_COMMANDS.map(({ cmd, desc }) => (
-                    <button key={cmd} style={{ ...styles.btnSecondary, width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', opacity: isConnected ? 1 : 0.5 }}
-                      onClick={() => { if (isConnected) { sendCommand(cmd); addLog(`Sent: ${cmd}`); } else { addLog('Not connected'); } }}
-                      disabled={!isConnected}
-                    >
-                      <span>{cmd}</span>
-                      <span style={{ color: '#666', fontSize: '10px' }}>{desc}</span>
-                    </button>
-                  ))}
-                </div>
-                <button style={{ ...styles.btnSecondary, width: '100%', marginTop: '10px', backgroundColor: isConnected ? tok.greenFaint : tok.panelBg, borderColor: isConnected ? '#4CAF50' : '#444' }} onClick={() => setActiveTab('monitor')}>
-                  📟 {isConnected ? 'View Serial Output →' : 'Go to Monitor to Connect →'}
-                </button>
-              </div>
-
-              <div style={{ ...styles.flashSection, flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <h4 style={styles.flashSectionTitle}>📋 Activity Log</h4>
-                <div style={styles.flashLogOutput}>
-                  {logs.length === 0 ? <div style={{ color: '#555' }}>No activity yet...</div>
-                    : logs.map((log, i) => <div key={i} style={styles.logLine}>{log}</div>)}
-                </div>
-              </div>
-            </div>
-
-            <div style={styles.editorPanel}>
-              {isEditorOpen && selectedFile ? (
-                <>
-                  <div style={styles.editorHeader}>
-                    <div style={styles.editorFileInfo}>
-                      <span style={{ fontSize: '14px' }}>📄</span>
-                      <span style={styles.editorFileName}>{selectedFile.name}{hasUnsavedChanges && <span style={{ color: '#FF9800' }}> •</span>}</span>
-                      <span style={styles.editorMode}>{editorMode === 'edit' ? '✏️ Editing' : '👁️ Viewing'}</span>
+                  {selectedFile && (
+                    <div style={styles.selectedFileInfo}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: '#4CAF50', fontSize: '16px' }}>✓</span>
+                        <span style={{ color: '#fff', fontSize: '13px', fontWeight: '500' }}>{selectedFile.name}</span>
+                      </div>
+                      <div style={{ color: '#666', fontSize: '11px', marginTop: '4px' }}>{(selectedFile.size / 1024).toFixed(2)} KB</div>
                     </div>
-                    <div style={styles.editorActions}>
-                      {editorMode === 'view'
-                        ? <button style={styles.btnEditorAction} onClick={() => setEditorMode('edit')}>✏️ Edit</button>
-                        : <>
-                            <button style={{ ...styles.btnEditorAction, backgroundColor: hasUnsavedChanges ? '#2e7d32' : '#333', opacity: hasUnsavedChanges ? 1 : 0.5 }} onClick={handleSaveFile} disabled={!hasUnsavedChanges}>💾 Save</button>
-                            {hasUnsavedChanges && <button style={{ ...styles.btnEditorAction, backgroundColor: '#c62828' }} onClick={handleDiscardChanges}>✗ Discard</button>}
-                            <button style={styles.btnEditorAction} onClick={() => setEditorMode('view')}>👁️ View</button>
-                          </>
+                  )}
+                  <div style={styles.fileActions}>
+                    <button style={styles.btnSecondary} onClick={handleNewFile}>✚ New</button>
+                    <button style={styles.btnSecondary} onClick={() => fileInputRef.current?.click()}>📂 Open</button>
+                    {selectedFile && isEditorOpen && <button style={styles.btnSecondary} onClick={handleDownloadFile}>💾 Save</button>}
+                  </div>
+                  <div style={{ marginTop: '12px' }}>
+                    <div style={{ color: '#666', fontSize: '10px', marginBottom: '8px', textTransform: 'uppercase' }}>Examples</div>
+                    <button style={{ ...styles.btnSecondary, width: '100%', backgroundColor: '#109810', borderColor: '#0e8514', textAlign: 'left', padding: '10px 12px' }} onClick={handleLoadExample}>💡 ESP32-S3 LED Blink</button>
+                  </div>
+                </div>
+
+                <div style={styles.flashSection}>
+                  <h4 style={styles.flashSectionTitle}>⚡ Flash Firmware</h4>
+                  <button style={{ ...styles.btnFlash, opacity: (!selectedFile || isProgramming) ? 0.5 : 1 }} onClick={handleFlashFirmware} disabled={!selectedFile || isProgramming}>
+                    {isProgramming ? '⏳ Programming...' : '🚀 Flash to Device'}
+                  </button>
+                  {isProgramming && (
+                    <div style={styles.progressBar}>
+                      <div style={{ ...styles.progressFill, width: `${progress}%` }} />
+                      <div style={styles.progressText}>{progress}%</div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>Note: For .ino files, download and flash via Arduino IDE.</div>
+                </div>
+
+                <div style={styles.flashSection}>
+                  <h4 style={styles.flashSectionTitle}>🔗 Test Connection</h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {SERIAL_TEST_COMMANDS.map(({ cmd, desc }) => (
+                      <button key={cmd} style={{ ...styles.btnSecondary, width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', opacity: isConnected ? 1 : 0.5 }}
+                        onClick={() => { if (isConnected) { sendCommand(cmd); addLog(`Sent: ${cmd}`); } else { addLog('Not connected'); } }}
+                        disabled={!isConnected}
+                      >
+                        <span>{cmd}</span>
+                        <span style={{ color: '#666', fontSize: '10px' }}>{desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button style={{ ...styles.btnSecondary, width: '100%', marginTop: '10px', backgroundColor: isConnected ? tok.greenFaint : tok.panelBg, borderColor: isConnected ? '#4CAF50' : '#444' }} onClick={() => setActiveTab('monitor')}>
+                    📟 {isConnected ? 'View Serial Output →' : 'Go to Monitor to Connect →'}
+                  </button>
+                </div>
+
+                <div style={{ ...styles.flashSection, flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <h4 style={styles.flashSectionTitle}>📋 Activity Log</h4>
+                  <div style={styles.flashLogOutput}>
+                    {logs.length === 0 ? <div style={{ color: '#555' }}>No activity yet...</div>
+                      : logs.map((log, i) => <div key={i} style={styles.logLine}>{log}</div>)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={styles.editorPanel}>
+                {isEditorOpen && selectedFile ? (
+                  <>
+                    <div style={styles.editorHeader}>
+                      <div style={styles.editorFileInfo}>
+                        <span style={{ fontSize: '14px' }}>📄</span>
+                        <span style={styles.editorFileName}>{selectedFile.name}{hasUnsavedChanges && <span style={{ color: '#FF9800' }}> •</span>}</span>
+                        <span style={styles.editorMode}>{editorMode === 'edit' ? '✏️ Editing' : '👁️ Viewing'}</span>
+                      </div>
+                      <div style={styles.editorActions}>
+                        {editorMode === 'view'
+                          ? <button style={styles.btnEditorAction} onClick={() => setEditorMode('edit')}>✏️ Edit</button>
+                          : <>
+                              <button style={{ ...styles.btnEditorAction, backgroundColor: hasUnsavedChanges ? '#2e7d32' : '#333', opacity: hasUnsavedChanges ? 1 : 0.5 }} onClick={handleSaveFile} disabled={!hasUnsavedChanges}>💾 Save</button>
+                              {hasUnsavedChanges && <button style={{ ...styles.btnEditorAction, backgroundColor: '#c62828' }} onClick={handleDiscardChanges}>✗ Discard</button>}
+                              <button style={styles.btnEditorAction} onClick={() => setEditorMode('view')}>👁️ View</button>
+                            </>
+                        }
+                        <button style={{ ...styles.btnEditorAction, marginLeft: '10px' }} onClick={handleCloseEditor}>✕</button>
+                      </div>
+                    </div>
+                    <div style={styles.editorContent}>
+                      <div style={styles.lineNumbers}>
+                        {(editorMode === 'edit' ? editedContent : fileContent).split('\n').map((_, i) => (
+                          <div key={i} style={styles.lineNumber}>{i + 1}</div>
+                        ))}
+                      </div>
+                      {editorMode === 'edit'
+                        ? <textarea ref={editorRef} style={styles.editorTextArea} value={editedContent} onChange={handleEditorChange} spellCheck={false} />
+                        : <pre style={styles.editorPre}>{fileContent || 'Empty file'}</pre>
                       }
-                      <button style={{ ...styles.btnEditorAction, marginLeft: '10px' }} onClick={handleCloseEditor}>✕</button>
                     </div>
-                  </div>
-                  <div style={styles.editorContent}>
-                    <div style={styles.lineNumbers}>
-                      {(editorMode === 'edit' ? editedContent : fileContent).split('\n').map((_, i) => (
-                        <div key={i} style={styles.lineNumber}>{i + 1}</div>
-                      ))}
+                    <div style={styles.editorFooter}>
+                      <span>Lines: {(editorMode === 'edit' ? editedContent : fileContent).split('\n').length}</span>
+                      <span>|</span><span>Chars: {(editorMode === 'edit' ? editedContent : fileContent).length}</span>
+                      <span>|</span><span>UTF-8</span>
                     </div>
-                    {editorMode === 'edit'
-                      ? <textarea ref={editorRef} style={styles.editorTextArea} value={editedContent} onChange={handleEditorChange} spellCheck={false} />
-                      : <pre style={styles.editorPre}>{fileContent || 'Empty file'}</pre>
-                    }
+                  </>
+                ) : (
+                  <div style={styles.editorPlaceholder}>
+                    <div style={{ fontSize: '48px', marginBottom: '20px', opacity: 0.3 }}>📝</div>
+                    <div style={{ color: '#888', fontSize: '16px', marginBottom: '10px' }}>Code Editor</div>
+                    <div style={{ color: '#555', fontSize: '13px', marginBottom: '20px' }}>Select a file or load an example</div>
+                    <button style={{ padding: '12px 24px', backgroundColor: '#1a3a1a', border: '1px solid #2e7d32', borderRadius: '6px', color: '#4CAF50', fontSize: '14px', cursor: 'pointer' }} onClick={handleLoadExample}>💡 Load ESP32-S3 Example</button>
                   </div>
-                  <div style={styles.editorFooter}>
-                    <span>Lines: {(editorMode === 'edit' ? editedContent : fileContent).split('\n').length}</span>
-                    <span>|</span><span>Chars: {(editorMode === 'edit' ? editedContent : fileContent).length}</span>
-                    <span>|</span><span>UTF-8</span>
-                  </div>
-                </>
-              ) : (
-                <div style={styles.editorPlaceholder}>
-                  <div style={{ fontSize: '48px', marginBottom: '20px', opacity: 0.3 }}>📝</div>
-                  <div style={{ color: '#888', fontSize: '16px', marginBottom: '10px' }}>Code Editor</div>
-                  <div style={{ color: '#555', fontSize: '13px', marginBottom: '20px' }}>Select a file or load an example</div>
-                  <button style={{ padding: '12px 24px', backgroundColor: '#1a3a1a', border: '1px solid #2e7d32', borderRadius: '6px', color: '#4CAF50', fontSize: '14px', cursor: 'pointer' }} onClick={handleLoadExample}>💡 Load ESP32-S3 Example</button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BenjiPanel — Roxanne motor control using Benji's single-char protocol
-//
-// Protocol (mirrors motor_console.html exactly):
-//   DC Motor 1:  q=CW, a=CCW, z=stop
-//   DC Motor 2:  w=CW, s=CCW, x=stop
-//   Stepper 0:   1=CW (hold), 2=CCW (hold), 0=stop all
-//   Stepper 1:   3=CW (hold), 4=CCW (hold), 0=stop all
-//   Stepper 2:   5=CW (hold), 6=CCW (hold), 0=stop all
-//
-// Telemetry: JSON {"v1":float,"v2":float,"en":0|1,"sg0":int} every 100ms
+// BenjiPanel
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface BenjiPanelProps {
   sendChar: (char: string) => Promise<void>;
+  sendRaw: (str: string) => Promise<void>;
   isConnected: boolean;
   telemetry: { v1: number; v2: number; en: number; sg0: number } | null;
+  rpsResultTimestamp: number;
+  taughtPoses: Record<'rock' | 'paper' | 'scissors', boolean>;
+  onTaughtPosesChange: (poses: Record<'rock' | 'paper' | 'scissors', boolean>) => void;
   tok: ReturnType<typeof T>;
 }
 
-const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetry, tok }) => {
+const BenjiPanel: React.FC<BenjiPanelProps> = ({
+  sendChar,
+  sendRaw,
+  isConnected,
+  telemetry,
+  rpsResultTimestamp,
+  taughtPoses,
+  onTaughtPosesChange,
+  tok,
+}) => {
   const [isExpanded, setIsExpanded] = useState(true);
+  const [lastRpsMove, setLastRpsMove] = useState<'r' | 'p' | 's' | null>(null);
+  const [rpsWaiting, setRpsWaiting] = useState(false);
+  const [trainOpen, setTrainOpen] = useState(false);
   const disabled = !isConnected;
 
-  // Hold-to-run button — sends char on press, stop char on release
+  useEffect(() => {
+    if (rpsResultTimestamp > 0) setRpsWaiting(false);
+  }, [rpsResultTimestamp]);
+
+  const sendRps = async (move: 'r' | 'p' | 's') => {
+    setLastRpsMove(move);
+    setRpsWaiting(true);
+    await sendRaw(`RPS:${move}\n`);
+  };
+
+  const teachPose = async (name: 'rock' | 'paper' | 'scissors') => {
+    await sendRaw(`TEACH:${name}\n`);
+    // Optimistic update — readLoop will also confirm via TAUGHT: response
+    onTaughtPosesChange({ ...taughtPoses, [name]: true });
+  };
+
   const HoldBtn = ({
     label, pressChar, releaseChar, color = '#444',
   }: { label: string; pressChar: string; releaseChar: string; color?: string }) => (
@@ -989,7 +1173,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
       disabled={disabled}
       onMouseDown={() => sendChar(pressChar)}
       onMouseUp={() => sendChar(releaseChar)}
-      onMouseLeave={() => sendChar(releaseChar)} // safety: release if cursor leaves
+      onMouseLeave={() => sendChar(releaseChar)}
       onTouchStart={e => { e.preventDefault(); sendChar(pressChar); }}
       onTouchEnd={() => sendChar(releaseChar)}
       style={{
@@ -1000,16 +1184,16 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
         fontFamily: "'Nunito', 'Helvetica Neue', sans-serif",
-        userSelect: 'none',
-        WebkitUserSelect: 'none',
+        userSelect: 'none', WebkitUserSelect: 'none',
       } as React.CSSProperties}
     >
       {label}
     </button>
   );
 
-  // Tap button — single send, no release needed
-  const TapBtn = ({ label, char, color = '#555' }: { label: string; char: string; color?: string }) => (
+  const TapBtn = ({
+    label, char, color = '#555',
+  }: { label: string; char: string; color?: string }) => (
     <button
       disabled={disabled}
       onClick={() => sendChar(char)}
@@ -1028,24 +1212,54 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
   );
 
   const sectionTitle = (t: string) => (
-    <div style={{ fontSize: '11px', fontWeight: 700, color: tok.textMuted, textTransform: 'uppercase' as const, letterSpacing: '0.06em', marginBottom: '6px' }}>
+    <div style={{
+      fontSize: '11px', fontWeight: 700, color: tok.textMuted,
+      textTransform: 'uppercase' as const, letterSpacing: '0.06em', marginBottom: '6px',
+    }}>
       {t}
     </div>
   );
 
-  // SG0 load bar colour
   const sg0Color = telemetry
     ? telemetry.sg0 < 50 ? '#f44336' : telemetry.sg0 < 150 ? '#ff9800' : '#00e5ff'
     : '#555';
 
+  const rpsConfig: { move: 'r' | 'p' | 's'; emoji: string; label: string; desc: string }[] = [
+    { move: 'r', emoji: '✊', label: 'Rock',     desc: 'Fist' },
+    { move: 'p', emoji: '🖐',  label: 'Paper',    desc: 'Open' },
+    { move: 's', emoji: '✌️',  label: 'Scissors', desc: 'Peace' },
+  ];
+
+  const trainConfig: { name: 'rock' | 'paper' | 'scissors'; emoji: string; label: string }[] = [
+    { name: 'rock',     emoji: '✊', label: 'Rock' },
+    { name: 'paper',    emoji: '🖐',  label: 'Paper' },
+    { name: 'scissors', emoji: '✌️',  label: 'Scissors' },
+  ];
+
+  const allTaught = taughtPoses.rock && taughtPoses.paper && taughtPoses.scissors;
+
   return (
-    <div style={{ border: `1.5px solid ${tok.orange}44`, borderRadius: '10px', overflow: 'hidden', background: tok.orangeFaint, flexShrink: 0 }}>
+    <div style={{
+      border: `1.5px solid ${tok.orange}44`,
+      borderRadius: '10px',
+      background: tok.orangeFaint,
+      flexShrink: 0,
+    }}>
       {/* Header */}
-      <div onClick={() => setIsExpanded(p => !p)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 12px', cursor: 'pointer', background: tok.panelHeaderBg, borderBottom: isExpanded ? `1px solid ${tok.orange}33` : 'none' }}>
+      <div
+        onClick={() => setIsExpanded(p => !p)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '7px 12px', cursor: 'pointer',
+          background: tok.panelHeaderBg,
+          borderBottom: isExpanded ? `1px solid ${tok.orange}33` : 'none',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '15px' }}>🤖</span>
-          <span style={{ fontWeight: 800, fontSize: '12px', color: tok.orangeText, fontFamily: "'Nunito', 'Helvetica Neue', sans-serif" }}>Roxanne Motor Controls</span>
-          {/* EN status pill */}
+          <span style={{ fontWeight: 800, fontSize: '12px', color: tok.orangeText, fontFamily: "'Nunito', 'Helvetica Neue', sans-serif" }}>
+            Roxanne Motor Controls
+          </span>
           {telemetry && (
             <span style={{
               fontSize: '10px', borderRadius: '4px', padding: '1px 8px', fontWeight: 700,
@@ -1056,7 +1270,9 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
               {telemetry.en === 1 ? 'MOTORS LOCKED' : 'MOTORS RELEASED'}
             </span>
           )}
-          {!isConnected && <span style={{ fontSize: '10px', color: tok.textMuted, fontStyle: 'italic' }}>— connect first</span>}
+          {!isConnected && (
+            <span style={{ fontSize: '10px', color: tok.textMuted, fontStyle: 'italic' }}>— connect first</span>
+          )}
         </div>
         <span style={{ color: tok.textMuted, fontSize: '11px' }}>{isExpanded ? '▲' : '▼'}</span>
       </div>
@@ -1064,7 +1280,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
       {isExpanded && (
         <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-          {/* Telemetry row */}
+          {/* ── Live Telemetry ── */}
           {telemetry && (
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' as const }}>
               {[
@@ -1084,7 +1300,73 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
             </div>
           )}
 
-          {/* DC Motors */}
+          {/* ── RPS Hand Positions ── */}
+          <div>
+            {sectionTitle('✊ Hand Position (RPS)')}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+              {rpsConfig.map(({ move, emoji, label, desc }) => {
+                const isActive = lastRpsMove === move;
+                const taught = taughtPoses[move === 'r' ? 'rock' : move === 'p' ? 'paper' : 'scissors'];
+                const isDisabled = disabled || rpsWaiting || !taught;
+                return (
+                  <button
+                    key={move}
+                    disabled={isDisabled}
+                    onClick={() => sendRps(move)}
+                    title={!taught ? `Train ${label} position first` : undefined}
+                    style={{
+                      flex: 1, padding: '10px 6px', borderRadius: '9px',
+                      border: `2px solid ${isActive ? tok.orange : taught ? tok.border : tok.borderSubtle}`,
+                      background: isActive ? tok.orangeFaint : isDisabled ? tok.border : tok.inputBg,
+                      color: isDisabled ? tok.textMuted : tok.textPrimary,
+                      cursor: isDisabled ? 'not-allowed' : 'pointer',
+                      opacity: isDisabled ? 0.5 : 1,
+                      display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: '3px',
+                      fontFamily: "'Nunito', sans-serif",
+                      position: 'relative' as const,
+                      transition: 'all 0.12s ease',
+                      boxShadow: isActive ? `0 0 0 3px ${tok.orangeSubtle}` : 'none',
+                    }}
+                  >
+                    <div style={{
+                      position: 'absolute' as const, top: '4px', right: '6px',
+                      fontSize: '9px', fontFamily: "'DM Mono', monospace", color: tok.textMuted,
+                      background: tok.borderSubtle, borderRadius: '3px', padding: '0 3px', lineHeight: '14px',
+                    }}>
+                      {move.toUpperCase()}
+                    </div>
+                    <span style={{ fontSize: '22px', lineHeight: 1 }}>{emoji}</span>
+                    <span style={{ fontSize: '11px', fontWeight: 800, color: isActive ? tok.orange : tok.textPrimary }}>{label}</span>
+                    <span style={{ fontSize: '9px', color: taught ? '#22c55e' : tok.textMuted }}>
+                      {taught ? '✓ trained' : desc}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {rpsWaiting && (
+              <div style={{
+                fontSize: '10px', color: '#f59e0b', fontFamily: "'DM Mono', monospace",
+                textAlign: 'center' as const, padding: '5px',
+                background: 'rgba(245,158,11,0.08)', borderRadius: '6px',
+                border: '1px solid rgba(245,158,11,0.25)', marginBottom: '2px',
+              }}>
+                ⏳ hand moving — waiting for result...
+              </div>
+            )}
+            {!allTaught && (
+              <div style={{ fontSize: '9px', color: tok.textMuted, fontFamily: "'DM Mono', monospace", textAlign: 'center' as const }}>
+                ↓ train positions below before playing
+              </div>
+            )}
+            {allTaught && (
+              <div style={{ fontSize: '9px', color: '#22c55e', fontFamily: "'DM Mono', monospace", textAlign: 'center' as const }}>
+                all positions trained — result popup appears automatically
+              </div>
+            )}
+          </div>
+
+          {/* ── DC Motors ── */}
           <div>
             {sectionTitle('⚙️ DC Motors')}
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' as const }}>
@@ -1107,7 +1389,7 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
             </div>
           </div>
 
-          {/* Steppers */}
+          {/* ── Steppers ── */}
           <div>
             {sectionTitle('🔩 Steppers (TMC2209) — hold to run')}
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' as const }}>
@@ -1130,6 +1412,90 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
             </div>
           </div>
 
+          {/* ── Train RPS Positions ── */}
+          <div style={{ borderTop: `1px solid ${tok.orange}33`, paddingTop: '10px' }}>
+            <button
+              onClick={() => setTrainOpen(o => !o)}
+              style={{
+                width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 6px 0',
+                color: tok.orange, fontWeight: 800, fontSize: '11px',
+                fontFamily: "'Nunito', sans-serif", textTransform: 'uppercase' as const, letterSpacing: '0.06em',
+              }}
+            >
+              <span>🎯 Train RPS Positions {allTaught ? '✓' : `(${Object.values(taughtPoses).filter(Boolean).length}/3)`}</span>
+              <span style={{ fontSize: '13px' }}>{trainOpen ? '▲' : '▼'}</span>
+            </button>
+
+            {trainOpen && (
+              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '8px' }}>
+                {/* Step 1 */}
+                <div style={{ fontSize: '10px', color: tok.textMuted, background: tok.inputBg, border: `1px solid ${tok.border}`, borderRadius: '6px', padding: '7px 10px', lineHeight: 1.5 }}>
+                  <span style={{ color: tok.orange, fontWeight: 700 }}>Step 1</span> — Open Roxanne's hand fully, then set home:
+                </div>
+                <button
+                  disabled={disabled}
+                  onClick={() => sendRaw('ZERO\n')}
+                  style={{
+                    padding: '8px', borderRadius: '7px', border: `1.5px solid ${tok.border}`,
+                    background: tok.inputBg, color: tok.textPrimary,
+                    fontSize: '11px', fontWeight: 700, cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.5 : 1, fontFamily: "'Nunito', sans-serif",
+                  }}
+                >
+                  ⊘ ZERO — Set Open Hand as Home
+                </button>
+
+                {/* Step 2 */}
+                <div style={{ fontSize: '10px', color: tok.textMuted, background: tok.inputBg, border: `1px solid ${tok.border}`, borderRadius: '6px', padding: '7px 10px', lineHeight: 1.5 }}>
+                  <span style={{ color: tok.orange, fontWeight: 700 }}>Step 2</span> — Use DC/Stepper controls above to pose the hand, then click the matching button:
+                </div>
+
+                {trainConfig.map(({ name, emoji, label }) => {
+                  const taught = taughtPoses[name];
+                  return (
+                    <button
+                      key={name}
+                      disabled={disabled}
+                      onClick={() => teachPose(name)}
+                      style={{
+                        padding: '10px 12px', borderRadius: '8px',
+                        border: `1.5px solid ${taught ? '#22c55e' : tok.orange}`,
+                        background: taught ? 'rgba(34,197,94,0.1)' : tok.orangeFaint,
+                        color: taught ? '#22c55e' : tok.orange,
+                        fontSize: '12px', fontWeight: 700,
+                        cursor: disabled ? 'not-allowed' : 'pointer',
+                        opacity: disabled ? 0.5 : 1,
+                        fontFamily: "'Nunito', sans-serif",
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                      }}
+                    >
+                      <span style={{ fontSize: '20px' }}>{emoji}</span>
+                      <span style={{ flex: 1, textAlign: 'left' as const }}>
+                        {taught ? `✓ ${label} trained` : `Teach ${label} position`}
+                      </span>
+                      {taught && (
+                        <span
+                          title="Clear this position"
+                          onClick={e => { e.stopPropagation(); onTaughtPosesChange({ ...taughtPoses, [name]: false }); }}
+                          style={{ fontSize: '11px', color: tok.textMuted, cursor: 'pointer', padding: '2px 6px', borderRadius: '4px', background: tok.inputBg }}
+                        >
+                          ✕
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+
+                {allTaught && (
+                  <div style={{ fontSize: '10px', color: '#22c55e', textAlign: 'center' as const, padding: '6px', background: 'rgba(34,197,94,0.08)', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.25)', fontWeight: 700 }}>
+                    🎉 All positions trained! Use the RPS buttons above to play.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
         </div>
       )}
     </div>
@@ -1141,106 +1507,106 @@ const BenjiPanel: React.FC<BenjiPanelProps> = ({ sendChar, isConnected, telemetr
 // =====================================================
 
 const buildStyles = (tok: ReturnType<typeof T>): { [key: string]: React.CSSProperties } => ({
-  container: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tok.pageBg, zIndex: 1000, display: 'flex', flexDirection: 'column', fontFamily: "'Nunito', 'Helvetica Neue', sans-serif", transition: 'background 0.3s' },
-  header: { background: tok.cardBg, borderBottom: `1.5px solid ${tok.border}`, padding: '12px 320px 12px 20px', boxShadow: tok.shadow, transition: 'background 0.3s' },
-  headerContent: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  title: { margin: 0, color: tok.textPrimary, fontSize: '16px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
-  closeButton: { backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.orangeText, fontSize: '20px', cursor: 'pointer', padding: '2px 10px', lineHeight: '1' },
-  tabs: { display: 'flex', backgroundColor: tok.panelHeaderBg, borderBottom: `1.5px solid ${tok.border}`, paddingLeft: '20px' },
-  tab: { backgroundColor: 'transparent', border: 'none', color: tok.textMuted, padding: '11px 20px', cursor: 'pointer', fontSize: '13px', fontWeight: '700', fontFamily: "'Nunito', sans-serif", borderBottom: '2px solid transparent', transition: 'color 0.15s' },
-  tabActive: { color: tok.orange, borderBottomColor: '#EB7923' },
-  content: { flex: 1, overflow: 'auto', padding: '15px', background: tok.pageBg },
-  sidebar: { width: '260px', backgroundColor: tok.panelBg, borderRadius: '12px', padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', border: `1.5px solid ${tok.border}` },
-  sidebarSection: { display: 'flex', flexDirection: 'column', gap: '10px' },
-  sidebarTitle: { margin: 0, fontSize: '11px', color: tok.textMuted, textTransform: 'uppercase', letterSpacing: '1px' },
-  divider: { borderTop: `1.5px solid ${tok.borderSubtle}`, margin: '5px 0' },
-  select: { width: '100%', padding: '8px 10px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.textPrimary, fontSize: '13px', cursor: 'pointer' },
-  inputGroup: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  inputLabel: { color: tok.textMuted, fontSize: '11px', textTransform: 'uppercase' },
-  input: { width: '100%', padding: '8px 10px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Consolas', monospace", boxSizing: 'border-box' },
-  cmdDesc: { fontSize: '11px', color: tok.textMuted, padding: '8px', backgroundColor: tok.orangeFaint, borderRadius: '8px', border: `1px solid ${tok.borderSubtle}` },
-  btnSend: { width: '100%', padding: '10px', backgroundColor: tok.orange, border: 'none', borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif", boxShadow: `0 2px 8px ${tok.orangeSubtle}` },
-  quickGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' },
-  quickBtn: { padding: '6px 8px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
-  stats: { fontSize: '11px', color: tok.textMuted, textAlign: 'center', padding: '8px', backgroundColor: tok.orangeFaint, borderRadius: '8px', marginTop: 'auto' },
-  terminalArea: { flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: tok.termBg, borderRadius: '14px', overflow: 'hidden', border: `1.5px solid ${tok.borderStrong}`, boxShadow: tok.shadow },
-  controlBar: { display: 'flex', gap: '10px', alignItems: 'center', backgroundColor: tok.termHeaderBg, padding: '10px 15px', borderBottom: `1px solid ${tok.border}` },
-  btnConnect: { padding: '8px 16px', border: 'none', borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif" },
-  baudSelect: { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.08)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '13px' },
-  btnSmall: { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.07)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', cursor: 'pointer' },
-  connectionStatus: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
-  terminal: { flex: 1, padding: '15px', whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '13px', color: tok.termText, fontFamily: "'DM Mono', 'Monaco', 'Consolas', monospace", lineHeight: '1.5', background: 'transparent' },
-  inputRow: { display: 'flex', borderTop: `1px solid ${tok.border}` },
-  manualInput: { flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg, border: 'none', color: tok.termText, fontSize: '14px', fontFamily: "'DM Mono', 'Monaco', monospace", outline: 'none' },
-  btnInputSend: { padding: '12px 20px', backgroundColor: tok.orange, border: 'none', borderLeft: `1px solid ${tok.border}`, color: tok.textOnOrange, fontSize: '13px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
-  section: { backgroundColor: tok.cardBg, borderRadius: '12px', padding: '20px', marginBottom: '15px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
-  sectionTitle: { margin: '0 0 15px 0', color: tok.textPrimary, fontSize: '14px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
-  btnPrimary: { backgroundColor: tok.orange, color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif", boxShadow: `0 2px 8px ${tok.orangeSubtle}` },
-  btnSuccess: { backgroundColor: tok.green, color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif" },
-  progressBar: { position: 'relative', width: '100%', height: '24px', backgroundColor: tok.orangeFaint, borderRadius: '8px', overflow: 'hidden', marginTop: '12px', border: `1.5px solid ${tok.border}` },
-  progressFill: { height: '100%', backgroundColor: tok.orange, transition: 'width 0.3s' },
-  progressText: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: tok.textPrimary, fontSize: '11px', fontWeight: '700' },
-  logOutput: { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '12px', maxHeight: '200px', overflowY: 'auto', fontFamily: "'DM Mono', monospace", fontSize: '12px' },
-  logLine: { color: tok.orangeText, marginBottom: '4px' },
-  configGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' },
-  configItem: { display: 'flex', flexDirection: 'column', gap: '6px' },
-  configLabel: { fontSize: '12px', color: tok.textMuted, fontWeight: '500' },
-  selectInput: { backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '8px 12px', color: tok.textPrimary, fontSize: '13px' },
-  statusGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' },
-  statusField: { backgroundColor: tok.orangeFaint, padding: '12px', borderRadius: '8px', border: `1.5px solid ${tok.borderSubtle}` },
-  statusFieldLabel: { fontSize: '10px', color: tok.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' },
-  statusFieldValue: { fontSize: '14px', fontWeight: '700', color: tok.textPrimary, fontFamily: "'DM Mono', monospace" },
-  flashSidebar: { width: '300px', display: 'flex', flexDirection: 'column', gap: '15px', overflowY: 'auto' },
-  flashSection: { backgroundColor: tok.cardBg, borderRadius: '14px', padding: '15px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
+  container:         { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tok.pageBg, zIndex: 1000, display: 'flex', flexDirection: 'column', fontFamily: "'Nunito', 'Helvetica Neue', sans-serif", transition: 'background 0.3s' },
+  header:            { background: tok.cardBg, borderBottom: `1.5px solid ${tok.border}`, padding: '12px 320px 12px 20px', boxShadow: tok.shadow, transition: 'background 0.3s' },
+  headerContent:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  title:             { margin: 0, color: tok.textPrimary, fontSize: '16px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
+  closeButton:       { backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.orangeText, fontSize: '20px', cursor: 'pointer', padding: '2px 10px', lineHeight: '1' },
+  tabs:              { display: 'flex', backgroundColor: tok.panelHeaderBg, borderBottom: `1.5px solid ${tok.border}`, paddingLeft: '20px' },
+  tab:               { backgroundColor: 'transparent', border: 'none', color: tok.textMuted, padding: '11px 20px', cursor: 'pointer', fontSize: '13px', fontWeight: '700', fontFamily: "'Nunito', sans-serif", borderBottom: '2px solid transparent', transition: 'color 0.15s' },
+  tabActive:         { color: tok.orange, borderBottomColor: '#EB7923' },
+  content:           { flex: 1, overflow: 'auto', padding: '15px', background: tok.pageBg },
+  sidebar:           { width: '260px', backgroundColor: tok.panelBg, borderRadius: '12px', padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', border: `1.5px solid ${tok.border}` },
+  sidebarSection:    { display: 'flex', flexDirection: 'column', gap: '10px' },
+  sidebarTitle:      { margin: 0, fontSize: '11px', color: tok.textMuted, textTransform: 'uppercase', letterSpacing: '1px' },
+  divider:           { borderTop: `1.5px solid ${tok.borderSubtle}`, margin: '5px 0' },
+  select:            { width: '100%', padding: '8px 10px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.textPrimary, fontSize: '13px', cursor: 'pointer' },
+  inputGroup:        { display: 'flex', flexDirection: 'column', gap: '4px' },
+  inputLabel:        { color: tok.textMuted, fontSize: '11px', textTransform: 'uppercase' },
+  input:             { width: '100%', padding: '8px 10px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Consolas', monospace", boxSizing: 'border-box' },
+  cmdDesc:           { fontSize: '11px', color: tok.textMuted, padding: '8px', backgroundColor: tok.orangeFaint, borderRadius: '8px', border: `1px solid ${tok.borderSubtle}` },
+  btnSend:           { width: '100%', padding: '10px', backgroundColor: tok.orange, border: 'none', borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif", boxShadow: `0 2px 8px ${tok.orangeSubtle}` },
+  quickGrid:         { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' },
+  quickBtn:          { padding: '6px 8px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
+  stats:             { fontSize: '11px', color: tok.textMuted, textAlign: 'center', padding: '8px', backgroundColor: tok.orangeFaint, borderRadius: '8px', marginTop: 'auto' },
+  terminalArea:      { flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: tok.termBg, borderRadius: '14px', overflow: 'hidden', border: `1.5px solid ${tok.borderStrong}`, boxShadow: tok.shadow, minHeight: 0 },
+  controlBar:        { display: 'flex', gap: '10px', alignItems: 'center', backgroundColor: tok.termHeaderBg, padding: '10px 15px', borderBottom: `1px solid ${tok.border}` },
+  btnConnect:        { padding: '8px 16px', border: 'none', borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif" },
+  baudSelect:        { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.08)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '13px' },
+  btnSmall:          { padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.07)', border: `1px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', cursor: 'pointer' },
+  connectionStatus:  { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
+  terminal:          { flex: 1, padding: '15px', whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '13px', color: tok.termText, fontFamily: "'DM Mono', 'Monaco', 'Consolas', monospace", lineHeight: '1.5', background: 'transparent' },
+  inputRow:          { display: 'flex', borderTop: `1px solid ${tok.border}` },
+  manualInput:       { flex: 1, padding: '12px 15px', backgroundColor: tok.termInputBg, border: 'none', color: tok.termText, fontSize: '14px', fontFamily: "'DM Mono', 'Monaco', monospace", outline: 'none' },
+  btnInputSend:      { padding: '12px 20px', backgroundColor: tok.orange, border: 'none', borderLeft: `1px solid ${tok.border}`, color: tok.textOnOrange, fontSize: '13px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
+  section:           { backgroundColor: tok.cardBg, borderRadius: '12px', padding: '20px', marginBottom: '15px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
+  sectionTitle:      { margin: '0 0 15px 0', color: tok.textPrimary, fontSize: '14px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
+  btnPrimary:        { backgroundColor: tok.orange, color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif", boxShadow: `0 2px 8px ${tok.orangeSubtle}` },
+  btnSuccess:        { backgroundColor: tok.green, color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: "'Nunito', sans-serif" },
+  progressBar:       { position: 'relative', width: '100%', height: '24px', backgroundColor: tok.orangeFaint, borderRadius: '8px', overflow: 'hidden', marginTop: '12px', border: `1.5px solid ${tok.border}` },
+  progressFill:      { height: '100%', backgroundColor: tok.orange, transition: 'width 0.3s' },
+  progressText:      { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: tok.textPrimary, fontSize: '11px', fontWeight: '700' },
+  logOutput:         { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '12px', maxHeight: '200px', overflowY: 'auto', fontFamily: "'DM Mono', monospace", fontSize: '12px' },
+  logLine:           { color: tok.orangeText, marginBottom: '4px' },
+  configGrid:        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' },
+  configItem:        { display: 'flex', flexDirection: 'column', gap: '6px' },
+  configLabel:       { fontSize: '12px', color: tok.textMuted, fontWeight: '500' },
+  selectInput:       { backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '8px 12px', color: tok.textPrimary, fontSize: '13px' },
+  statusGrid:        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' },
+  statusField:       { backgroundColor: tok.orangeFaint, padding: '12px', borderRadius: '8px', border: `1.5px solid ${tok.borderSubtle}` },
+  statusFieldLabel:  { fontSize: '10px', color: tok.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' },
+  statusFieldValue:  { fontSize: '14px', fontWeight: '700', color: tok.textPrimary, fontFamily: "'DM Mono', monospace" },
+  flashSidebar:      { width: '300px', display: 'flex', flexDirection: 'column', gap: '15px', overflowY: 'auto' },
+  flashSection:      { backgroundColor: tok.cardBg, borderRadius: '14px', padding: '15px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
   flashSectionTitle: { margin: '0 0 12px 0', color: tok.textPrimary, fontSize: '13px', fontWeight: '800', fontFamily: "'Nunito', sans-serif" },
-  dropZone: { border: `2px dashed ${tok.border}`, borderRadius: '10px', padding: '25px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s', marginBottom: '12px', backgroundColor: tok.orangeFaint },
-  selectedFileInfo: { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' },
-  fileActions: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
-  btnSecondary: { flex: 1, minWidth: '60px', padding: '8px 12px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer', transition: 'all 0.2s', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
-  btnFlash: { width: '100%', padding: '12px 20px', backgroundColor: tok.orange, border: 'none', borderRadius: '10px', color: tok.textOnOrange, fontSize: '14px', fontWeight: '800', cursor: 'pointer', transition: 'all 0.2s', fontFamily: "'Nunito', sans-serif", boxShadow: `0 3px 12px ${tok.orangeSubtle}` },
-  flashLogOutput: { flex: 1, backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '10px', overflowY: 'auto', fontFamily: "'DM Mono', monospace", fontSize: '11px', minHeight: '100px', color: tok.orangeText },
-  editorPanel: { flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: tok.cardBgAlt, borderRadius: '14px', border: `1.5px solid ${tok.border}`, overflow: 'hidden' },
-  editorHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: tok.cardBg, borderBottom: `1.5px solid ${tok.borderSubtle}`, padding: '10px 15px' },
-  editorFileInfo: { display: 'flex', alignItems: 'center', gap: '10px' },
-  editorFileName: { color: tok.textPrimary, fontSize: '13px', fontWeight: '700' },
-  editorMode: { backgroundColor: tok.orangeFaint, padding: '3px 8px', borderRadius: '6px', fontSize: '10px', color: tok.orangeText, fontWeight: '700', border: `1px solid ${tok.border}` },
-  editorActions: { display: 'flex', gap: '8px' },
-  btnEditorAction: { padding: '6px 12px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
-  editorContent: { flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' },
-  lineNumbers: { width: '50px', backgroundColor: tok.panelHeaderBg, borderRight: `1.5px solid ${tok.borderSubtle}`, padding: '15px 0', overflowY: 'auto', textAlign: 'right', userSelect: 'none' },
-  lineNumber: { color: tok.textMuted, fontSize: '12px', fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', paddingRight: '10px' },
-  editorTextArea: { flex: 1, backgroundColor: 'transparent', border: 'none', color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', padding: '15px', resize: 'none', outline: 'none', overflowY: 'auto', whiteSpace: 'pre', tabSize: 4 },
-  editorPre: { flex: 1, margin: 0, color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', padding: '15px', overflowY: 'auto', whiteSpace: 'pre', tabSize: 4 },
-  editorFooter: { display: 'flex', gap: '15px', backgroundColor: tok.panelBg, borderTop: `1.5px solid ${tok.borderSubtle}`, padding: '8px 15px', fontSize: '11px', color: tok.textMuted, fontFamily: "'DM Mono', monospace" },
+  dropZone:          { border: `2px dashed ${tok.border}`, borderRadius: '10px', padding: '25px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s', marginBottom: '12px', backgroundColor: tok.orangeFaint },
+  selectedFileInfo:  { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' },
+  fileActions:       { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+  btnSecondary:      { flex: 1, minWidth: '60px', padding: '8px 12px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '8px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer', transition: 'all 0.2s', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
+  btnFlash:          { width: '100%', padding: '12px 20px', backgroundColor: tok.orange, border: 'none', borderRadius: '10px', color: tok.textOnOrange, fontSize: '14px', fontWeight: '800', cursor: 'pointer', transition: 'all 0.2s', fontFamily: "'Nunito', sans-serif", boxShadow: `0 3px 12px ${tok.orangeSubtle}` },
+  flashLogOutput:    { flex: 1, backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '8px', padding: '10px', overflowY: 'auto', fontFamily: "'DM Mono', monospace", fontSize: '11px', minHeight: '100px', color: tok.orangeText },
+  editorPanel:       { flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: tok.cardBgAlt, borderRadius: '14px', border: `1.5px solid ${tok.border}`, overflow: 'hidden' },
+  editorHeader:      { display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: tok.cardBg, borderBottom: `1.5px solid ${tok.borderSubtle}`, padding: '10px 15px' },
+  editorFileInfo:    { display: 'flex', alignItems: 'center', gap: '10px' },
+  editorFileName:    { color: tok.textPrimary, fontSize: '13px', fontWeight: '700' },
+  editorMode:        { backgroundColor: tok.orangeFaint, padding: '3px 8px', borderRadius: '6px', fontSize: '10px', color: tok.orangeText, fontWeight: '700', border: `1px solid ${tok.border}` },
+  editorActions:     { display: 'flex', gap: '8px' },
+  btnEditorAction:   { padding: '6px 12px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', cursor: 'pointer', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
+  editorContent:     { flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' },
+  lineNumbers:       { width: '50px', backgroundColor: tok.panelHeaderBg, borderRight: `1.5px solid ${tok.borderSubtle}`, padding: '15px 0', overflowY: 'auto', textAlign: 'right', userSelect: 'none' },
+  lineNumber:        { color: tok.textMuted, fontSize: '12px', fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', paddingRight: '10px' },
+  editorTextArea:    { flex: 1, backgroundColor: 'transparent', border: 'none', color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', padding: '15px', resize: 'none', outline: 'none', overflowY: 'auto', whiteSpace: 'pre', tabSize: 4 },
+  editorPre:         { flex: 1, margin: 0, color: tok.textPrimary, fontSize: '13px', fontFamily: "'DM Mono', 'Monaco', monospace", lineHeight: '1.6', padding: '15px', overflowY: 'auto', whiteSpace: 'pre', tabSize: 4 },
+  editorFooter:      { display: 'flex', gap: '15px', backgroundColor: tok.panelBg, borderTop: `1.5px solid ${tok.borderSubtle}`, padding: '8px 15px', fontSize: '11px', color: tok.textMuted, fontFamily: "'DM Mono', monospace" },
   editorPlaceholder: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#d1d5db' },
-  blockPanel: { width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column', backgroundColor: tok.panelBg, borderRight: `1.5px solid ${tok.border}`, overflow: 'hidden' },
-  blockPanelHeader: { padding: '10px 12px 8px', borderBottom: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: tok.panelHeaderBg },
+  blockPanel:        { width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column', backgroundColor: tok.panelBg, borderRight: `1.5px solid ${tok.border}`, overflow: 'hidden' },
+  blockPanelHeader:  { padding: '10px 12px 8px', borderBottom: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: tok.panelHeaderBg },
   sequenceNameInput: { backgroundColor: 'transparent', border: 'none', borderBottom: `1.5px solid ${tok.border}`, color: tok.textPrimary, fontSize: '13px', fontWeight: '700', fontFamily: "'Nunito', sans-serif", outline: 'none', padding: '2px 0', width: '100%' },
-  blockList: { flex: 1, overflowY: 'auto' as const, padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' },
-  blockEmpty: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '30px 0', flex: 1 },
-  blockCard: { backgroundColor: tok.inputBg, borderRadius: '10px', borderLeft: `3px solid ${tok.orange}`, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
-  blockCardTop: { display: 'flex', alignItems: 'center', gap: '6px' },
-  blockTypeBadge: { fontSize: '9px', fontWeight: '700', letterSpacing: '0.5px', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase' as const, flex: 1 },
-  blockControls: { display: 'flex', gap: '2px' },
-  blockCtrlBtn: { backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`, color: tok.textMuted, fontSize: '11px', cursor: 'pointer', borderRadius: '5px', padding: '1px 5px', lineHeight: 1.4, minWidth: '22px', minHeight: '22px', fontWeight: '700' },
-  blockBody: { display: 'flex', flexDirection: 'column' as const, gap: '4px' },
-  blockInput: { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', padding: '4px 7px', fontFamily: "'DM Mono', 'Consolas', monospace", outline: 'none', width: '100%', boxSizing: 'border-box' as const },
-  blockAddArea: { padding: '6px 8px', borderTop: `1.5px solid ${tok.borderSubtle}`, position: 'relative' as const },
-  btnAddBlock: { width: '100%', padding: '8px', backgroundColor: tok.orangeFaint, border: `1.5px dashed ${tok.border}`, borderRadius: '8px', color: tok.orange, fontSize: '12px', cursor: 'pointer', minHeight: '36px', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
-  addMenuPopup: { display: 'flex', flexDirection: 'column' as const, gap: '2px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '10px', overflow: 'hidden', boxShadow: tok.shadow },
-  addMenuOption: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${tok.borderSubtle}`, color: tok.textPrimary, fontSize: '12px', cursor: 'pointer', textAlign: 'left' as const, gap: '8px', minHeight: '38px', fontFamily: "'Nunito', sans-serif" },
-  blockRunArea: { padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column' as const, gap: '6px' },
-  btnRun: { width: '100%', padding: '10px', backgroundColor: tok.green, border: `1.5px solid ${tok.green}55`, borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', minHeight: '40px', fontFamily: "'Nunito', sans-serif", boxShadow: '0 2px 8px rgba(22,163,74,0.2)' },
-  btnStop: { width: '100%', padding: '10px', backgroundColor: tok.red, border: `1.5px solid ${tok.red}55`, borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', minHeight: '40px', fontFamily: "'Nunito', sans-serif" },
-  blockStats: { textAlign: 'center' as const, color: tok.textMuted, fontSize: '10px', fontFamily: "'DM Mono', 'Monaco', monospace" },
-  blockSettings: { padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column' as const, gap: '5px' },
-  settingsSelect: { backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', padding: '3px 5px', outline: 'none', flex: 1 },
-  cmdRefToggle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', background: 'none', border: 'none', color: tok.textMuted, fontSize: '10px', textTransform: 'uppercase' as const, letterSpacing: '0.8px', cursor: 'pointer', padding: '4px 0', minHeight: '28px', fontFamily: "'Nunito', sans-serif" },
-  cmdRefList: { display: 'flex', flexDirection: 'column' as const, gap: '1px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto' as const },
-  cmdRefRow: { display: 'grid', gridTemplateColumns: '70px 1fr', gridTemplateRows: 'auto auto', gap: '0 6px', padding: '6px 8px', background: tok.orangeFaint, border: `1.5px solid ${tok.borderSubtle}`, borderRadius: '7px', cursor: 'pointer', textAlign: 'left' as const, transition: 'background 0.1s', fontFamily: "'Nunito', sans-serif" },
-  cmdRefName: { color: tok.orange, fontSize: '11px', fontFamily: "'DM Mono', 'Monaco', monospace", fontWeight: '600', gridColumn: '1', gridRow: '1' },
-  cmdRefParams: { color: '#f59e0b', fontSize: '10px', fontFamily: "'DM Mono', 'Monaco', monospace", gridColumn: '2', gridRow: '1', alignSelf: 'center' },
-  cmdRefDesc: { color: tok.textMuted, fontSize: '10px', gridColumn: '1 / -1', gridRow: '2', marginTop: '2px' },
+  blockList:         { flex: 1, overflowY: 'auto' as const, padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' },
+  blockEmpty:        { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '30px 0', flex: 1 },
+  blockCard:         { backgroundColor: tok.inputBg, borderRadius: '10px', borderLeft: `3px solid ${tok.orange}`, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px', border: `1.5px solid ${tok.border}`, boxShadow: tok.shadow },
+  blockCardTop:      { display: 'flex', alignItems: 'center', gap: '6px' },
+  blockTypeBadge:    { fontSize: '9px', fontWeight: '700', letterSpacing: '0.5px', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase' as const, flex: 1 },
+  blockControls:     { display: 'flex', gap: '2px' },
+  blockCtrlBtn:      { backgroundColor: 'transparent', border: `1.5px solid ${tok.border}`, color: tok.textMuted, fontSize: '11px', cursor: 'pointer', borderRadius: '5px', padding: '1px 5px', lineHeight: 1.4, minWidth: '22px', minHeight: '22px', fontWeight: '700' },
+  blockBody:         { display: 'flex', flexDirection: 'column' as const, gap: '4px' },
+  blockInput:        { backgroundColor: tok.orangeFaint, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.textPrimary, fontSize: '12px', padding: '4px 7px', fontFamily: "'DM Mono', 'Consolas', monospace", outline: 'none', width: '100%', boxSizing: 'border-box' as const },
+  blockAddArea:      { padding: '6px 8px', borderTop: `1.5px solid ${tok.borderSubtle}`, position: 'relative' as const },
+  btnAddBlock:       { width: '100%', padding: '8px', backgroundColor: tok.orangeFaint, border: `1.5px dashed ${tok.border}`, borderRadius: '8px', color: tok.orange, fontSize: '12px', cursor: 'pointer', minHeight: '36px', fontWeight: '700', fontFamily: "'Nunito', sans-serif" },
+  addMenuPopup:      { display: 'flex', flexDirection: 'column' as const, gap: '2px', backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '10px', overflow: 'hidden', boxShadow: tok.shadow },
+  addMenuOption:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${tok.borderSubtle}`, color: tok.textPrimary, fontSize: '12px', cursor: 'pointer', textAlign: 'left' as const, gap: '8px', minHeight: '38px', fontFamily: "'Nunito', sans-serif" },
+  blockRunArea:      { padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column' as const, gap: '6px' },
+  btnRun:            { width: '100%', padding: '10px', backgroundColor: tok.green, border: `1.5px solid ${tok.green}55`, borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', minHeight: '40px', fontFamily: "'Nunito', sans-serif", boxShadow: '0 2px 8px rgba(22,163,74,0.2)' },
+  btnStop:           { width: '100%', padding: '10px', backgroundColor: tok.red, border: `1.5px solid ${tok.red}55`, borderRadius: '8px', color: tok.textOnOrange, fontSize: '13px', fontWeight: '700', cursor: 'pointer', minHeight: '40px', fontFamily: "'Nunito', sans-serif" },
+  blockStats:        { textAlign: 'center' as const, color: tok.textMuted, fontSize: '10px', fontFamily: "'DM Mono', 'Monaco', monospace" },
+  blockSettings:     { padding: '8px', borderTop: `1.5px solid ${tok.borderSubtle}`, display: 'flex', flexDirection: 'column' as const, gap: '5px' },
+  settingsSelect:    { backgroundColor: tok.inputBg, border: `1.5px solid ${tok.border}`, borderRadius: '6px', color: tok.orangeText, fontSize: '11px', padding: '3px 5px', outline: 'none', flex: 1 },
+  cmdRefToggle:      { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', background: 'none', border: 'none', color: tok.textMuted, fontSize: '10px', textTransform: 'uppercase' as const, letterSpacing: '0.8px', cursor: 'pointer', padding: '4px 0', minHeight: '28px', fontFamily: "'Nunito', sans-serif" },
+  cmdRefList:        { display: 'flex', flexDirection: 'column' as const, gap: '1px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto' as const },
+  cmdRefRow:         { display: 'grid', gridTemplateColumns: '70px 1fr', gridTemplateRows: 'auto auto', gap: '0 6px', padding: '6px 8px', background: tok.orangeFaint, border: `1.5px solid ${tok.borderSubtle}`, borderRadius: '7px', cursor: 'pointer', textAlign: 'left' as const, transition: 'background 0.1s', fontFamily: "'Nunito', sans-serif" },
+  cmdRefName:        { color: tok.orange, fontSize: '11px', fontFamily: "'DM Mono', 'Monaco', monospace", fontWeight: '600', gridColumn: '1', gridRow: '1' },
+  cmdRefParams:      { color: '#f59e0b', fontSize: '10px', fontFamily: "'DM Mono', 'Monaco', monospace", gridColumn: '2', gridRow: '1', alignSelf: 'center' },
+  cmdRefDesc:        { color: tok.textMuted, fontSize: '10px', gridColumn: '1 / -1', gridRow: '2', marginTop: '2px' },
 });
 
 export default TotemProgrammingIDE;
